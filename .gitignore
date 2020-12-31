@@ -1,0 +1,27 @@
+# build dirs and external imported libraries
+/build
+/src/libipt
+/src/xed
+/src/mbuild
+
+# intermediate objects
+.DS_Store
+__pycache__
+*.pyc
+*.swp
+*.o
+*.mod.c
+*.ko
+*.order
+*.builtin
+*.cmd
+*.so
+*.dbg
+*.s
+*.a
+*.bin
+*.elf
+
+# virtual environments
+/env
+/venv
