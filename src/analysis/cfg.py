@@ -17,6 +17,7 @@
 
 import gzip
 import logging
+from optparse import OptionParser
 import os
 import re
 import sys
@@ -34,7 +35,7 @@ PTXED_INSTR = re.compile('([0-9a-f]+) +([a-z]+)')
 
 BRANCH_MNEMONICS = {
     'jb', 'jbe', 'jl', 'jle', 'jmp', 'jmpq', 'jnb', 'jnbe', 'jnl', 'jnle', 'jns',
-    'jnz', 'jo', 'jp', 'js', 'jz'
+    'jnz', 'jo', 'jp', 'js', 'jz', 'retq'
 }
 
 CALL_MNEMONICS = {
@@ -60,14 +61,14 @@ BORING_MNEMONICS = {
     'or', 'orb', 'orl', 'orq', 'orw', 'pcmpeqb', 'pcmpeqbx', 'pcmpeqd', 'pcmpistri',
     'pcmpistrix', 'pminub', 'pminubx', 'pmovmskb', 'popq', 'por', 'pshufb', 'pshufd',
     'pslldq', 'psrldq', 'psubb', 'punpcklbw', 'punpcklwd', 'pushq', 'pxor', 'rdtsc',
-    'rep', 'retq', 'rol', 'ror', 'sar', 'sbb', 'setb', 'setbe', 'setle', 'setnb',
+    'rep', 'rol', 'ror', 'sar', 'sbb', 'setb', 'setbe', 'setle', 'setnb',
     'setnbe', 'setnle', 'setnz', 'setnzb', 'seto', 'setz', 'setzb', 'shl', 'shr',
     'sub', 'subb', 'subl', 'subq', 'test', 'testb', 'testl', 'testq', 'tzcnt', 'ucomisdq',
     'vmovd', 'vmovdl', 'vmovdqax', 'vmovdqay', 'vmovdqux', 'vmovdquy', 'vmovq', 'vmovqq',
     'vpalignrx', 'vpand', 'vpandn', 'vpbroadcastb', 'vpcmpeqb', 'vpcmpeqbx', 'vpcmpeqby',
     'vpcmpgtb', 'vpcmpistri', 'vpminub', 'vpmovmskb', 'vpor', 'vpslldq', 'vpsubb', 'vpxor',
     'vzeroupper', 'xchg', 'xchgl', 'xgetbv', 'xor', 'xorl', 'xorps', 'xorq', 'xrstor',
-    'xsavec', 'andl', 'data', 'andq', 'andb'
+    'xsavec', 'andl', 'data', 'andq', 'andb', 'leaveq'
 }
 
 class CFGNode(object):
@@ -193,26 +194,38 @@ def parse_ptxed(input, graph=None, maps=None):
     return graph
 
 def main():
-    if len(sys.argv) <= 1:
-        sys.stdout.write("Usage: %s <ptxed> [maps]\n" % os.path.basename(sys.argv[0]))
+    parser = OptionParser(usage='Usage: %prog [options] 1.ptxed ...')
+    parser.add_option('-l', '--logging', action='store', type='int', default=20,
+            help='Log level [10-50] (default: 20 - Info)')
+
+    options, args = parser.parse_args()
+
+    if len(args) < 1:
+        parser.print_help()
         sys.exit(1)
 
     # init stdout logging
-    log.setLevel(logging.INFO)
+    log.setLevel(options.logging)
     handler = logging.StreamHandler()
     handler.setFormatter(logging.Formatter('%(levelname)7s | %(asctime)-15s | %(message)s'))
     log.addHandler(handler)
 
-    if len(sys.argv) >= 3:
-        map = maps.read_maps(sys.argv[2])
-
-    graph = parse_ptxed(sys.argv[1], None, map)
+    graph = nx.DiGraph()
+    for filepath in args:
+        map_fp = os.path.join(os.path.dirname(filepath), 'maps')
+        if not os.path.isfile(map_fp):
+            log.warning("No map file found for: %s" % map_fp)
+            map = None
+        else:
+            map = maps.read_maps(map_fp)
+        log.info("Parsing: %s" % filepath)
+        graph = parse_ptxed(filepath, graph, map)
 
     ofd, ofilepath = tempfile.mkstemp('.dot')
     os.close(ofd)
-    write_dot(graph, ofilepath)
 
-    log.info("Graph saved to: %s" % ofilepath)
+    log.info("Saving graph to: %s" % ofilepath)
+    write_dot(graph, ofilepath)
 
 if __name__ == "__main__":
     main()

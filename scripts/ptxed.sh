@@ -17,6 +17,7 @@
 
 PTXED="$(dirname $0)/../build/bin/ptxed"
 IPT_SCRIPTS_DIR="$(dirname $0)/../src/libipt/script"
+LIB_DIR="$(dirname $0)/../build/lib"
 
 if [ ! -f "$PTXED" ]; then
     echo "$PTXED not found, did you run build.sh?"
@@ -25,7 +26,7 @@ fi
 
 find -name "perf.data-aux-idx*.bin" -type f | grep -o "[0-9]\+" | \
     xargs -P $(nproc) -n 1 -I {} /bin/bash -c "\
-        $PTXED --att \
+        LD_LIBRARY_PATH="$LIB_DIR" $PTXED --att \
             \$($IPT_SCRIPTS_DIR/perf-get-opts.bash -m perf.data-sideband-cpu{}.pevent) \
             --pevent:vdso-x64 --event:tick --pt perf.data-aux-idx{}.bin \
             > {}.ptxed"

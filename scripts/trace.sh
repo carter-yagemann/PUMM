@@ -26,5 +26,6 @@ sudo perf record -e intel_pt//u -T --switch-events -- $@
 sudo chown "$USER" perf.data
 
 set -e
-$IPT_SCRIPTS_DIR/perf-read-aux.bash
-$IPT_SCRIPTS_DIR/perf-read-sideband.bash
+"$IPT_SCRIPTS_DIR/perf-read-aux.bash"
+"$IPT_SCRIPTS_DIR/perf-read-sideband.bash"
+"$(dirname $0)/procmap.sh"

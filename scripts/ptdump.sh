@@ -17,6 +17,7 @@
 
 PTDUMP="$(dirname $0)/../build/bin/ptdump"
 IPT_SCRIPTS_DIR="$(dirname $0)/../src/libipt/script"
+LIB_DIR="$(dirname $0)/../build/lib"
 
 if [ ! -f "$PTDUMP" ]; then
     echo "$PTDUMP not found, did you run build.sh?"
@@ -25,7 +26,7 @@ fi
 
 find -name "perf.data-aux-idx*.bin" -type f | \
     xargs -P $(nproc) -n 1 -I {} /bin/bash -c "\
-        $PTDUMP --no-pad --no-timing --no-cyc --lastip \
+        LD_LIBRARY_PATH="$LIB_DIR" $PTDUMP --no-pad --no-timing --no-cyc --lastip \
             $($IPT_SCRIPTS_DIR/perf-get-opts.bash) {} \
             > {}.ptdump"
 
