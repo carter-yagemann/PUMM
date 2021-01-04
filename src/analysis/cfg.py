@@ -31,7 +31,7 @@ import maps
 
 log = logging.getLogger(name=__name__)
 
-PTXED_INSTR = re.compile('([0-9a-f]+) +([a-z]+)')
+PTXED_INSTR = re.compile('([0-9a-f]+) ((?:[0-9-a-f]{2} )+) +([a-z]+)')
 
 BRANCH_MNEMONICS = {
     'jb', 'jbe', 'jl', 'jle', 'jmp', 'jmpq', 'jnb', 'jnbe', 'jnl', 'jnle', 'jns',
@@ -73,27 +73,38 @@ BORING_MNEMONICS = {
 
 class CFGNode(object):
 
-    # TODO - Incorporate symbol info to improve descriptions
-
-    def __init__(self, ava, func_head=False, procmap=None):
+    def __init__(self, ava, func_head=False, procmap=None, caller=None):
         self.ava = ava
         self.func_head = func_head
         self.rva = None
         self.obj = None
+        self.plt_sym = None
 
         if not procmap is None:
             # we can fill in more info about this node
-            rva, name = maps.ava_to_rva(procmap, self.ava)
-            if not name is None:
+            rva, obj = maps.ava_to_rva(procmap, self.ava)
+            if not obj is None:
                 self.rva = rva
-                self.obj = name
+                self.obj = obj
+                if rva in obj['reverse_plt']:
+                    self.plt_sym = obj['reverse_plt'][rva]
 
-        self._description = self._get_description()
+        self._description = self._get_description(caller)
 
-    def _get_description(self):
+    def _get_description(self, caller):
+        # preferably obj+rva, otherwiase ava
         if isinstance(self.rva, int):
-            return "%s+%#x" % (os.path.basename(self.obj), self.rva)
-        return "%#x" % self.ava
+            desc = "%s+%#x" % (os.path.basename(self.obj['name']), self.rva)
+        else:
+            desc = "%#x" % self.ava
+
+        # if PLT stub, include symbol name (and caller context, if available)
+        if isinstance(self.plt_sym, str):
+            if not caller is None:
+                desc += "[%x]" % hash(caller)
+            desc += " (PLT.%s)" % self.plt_sym
+
+        return desc
 
     def __repr__(self):
         return "<CFGNode %s>" % self._description
@@ -143,29 +154,35 @@ def parse_ptxed(input, graph=None, maps=None):
         graph = nx.DiGraph()
 
     prev_node = None
+    ret_addr = None
     is_bb_start = False
     is_func_start = False
+    entered_syscall = False
 
     for line in input.readlines():
         line = line.rstrip()  # remove newline character
 
         if line == '[disabled]':
             # tracing turned off, cannot assume next node
-            # is linked to prior
-            prev_node = None
-            is_bb_start = False
-            is_func_start = False
+            # is linked to prior unless we entered a syscall
+            if not entered_syscall:
+                prev_node = None
+                is_bb_start = False
+                is_func_start = False
+                ret_addr = None
         else:
             instr = PTXED_INSTR.match(line)
             if not instr is None:
                 # disassembled instruction
                 v_addr = int(instr.group(1), 16)
-                mnemonic = instr.group(2)
+                instr_size = len(instr.group(2)) // 3
+                mnemonic = instr.group(3)
 
                 # if this is the start of a basic block, update graph
                 if is_bb_start:
-                    curr_node = CFGNode(v_addr, is_func_start, maps)
-                    graph.add_node(curr_node)
+                    curr_node = CFGNode(v_addr, is_func_start, maps, prev_node)
+                    if not curr_node in graph:
+                        graph.add_node(curr_node)
                     if not prev_node is None:
                         graph.add_edge(prev_node, curr_node)
 
@@ -173,18 +190,37 @@ def parse_ptxed(input, graph=None, maps=None):
                     is_bb_start = False
                     is_func_start = False
 
+                    if not curr_node.plt_sym is None:
+                        # external function call, we're going to insert
+                        # a fake return and disconnect the next edge to
+                        # create self-contained objects in the CFG
+                        ret_node = CFGNode(ret_addr, is_func_start, maps)
+                        if not ret_node in graph:
+                            graph.add_node(ret_node)
+                        graph.add_edge(curr_node, ret_node)
+
+                        prev_node = None
+
                 if mnemonic in BRANCH_MNEMONICS:
                     # next address is the start of a basic block
                     is_bb_start = True
+                    entered_syscall = False
                 elif mnemonic in CALL_MNEMONICS:
                     # next address starts basic block and function
                     is_bb_start = True
                     is_func_start = True
+                    entered_syscall = False
+                    # determine this call's return address
+                    ret_addr = v_addr + instr_size
                 elif mnemonic in SYSCALL_MNEMONICS:
-                    pass  # TODO - Should we take special note of syscalls?
+                    # we're expecting PT to turn off because we're only tracing
+                    # user space, do not disconnect the next node from prior
+                    entered_syscall = True
                 elif mnemonic in BORING_MNEMONICS:
                     # nothing needs to be done
-                    pass
+                    is_bb_start = False
+                    is_func_start = False
+                    entered_syscall = True
                 else:
                     log.warning("Unhandled mnemonic: %s" % mnemonic)
 
