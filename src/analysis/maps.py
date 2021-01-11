@@ -16,6 +16,7 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 import re
+from zlib import adler32
 
 import cle
 
@@ -33,6 +34,7 @@ def read_maps(maps_fp):
     base_fo -- Base offset within object from which the VMA was read.
     reverse_plt -- Mapping of PLT stub RVAs to symbol names.
     cle -- A CLE loader instance. Note that it may have mapped objects differently than what
+    obj_id -- An integer that uniquely identifies this object
     was recorded in perf, so virtual addresses have to be carefully translated.
 
     Exceptions:
@@ -77,6 +79,7 @@ def read_maps(maps_fp):
                          'base_fo': int(file_offset, 16),
                          'reverse_plt': reverse_plt,
                          'cle': ld,
+                         'obj_id': adler32(name.encode('utf8')),
                         })
 
     return objs

@@ -22,32 +22,32 @@ import os
 import re
 import sys
 import tempfile
-from zlib import adler32
 
 import networkx as nx
 from networkx.drawing.nx_pydot import write_dot
+import pyvex
 
 import maps
 
 log = logging.getLogger(name=__name__)
 
-PTXED_INSTR = re.compile('([0-9a-f]+) ((?:[0-9-a-f]{2} )+) +([a-z]+)')
+PTXED_INSTR = re.compile('([0-9a-f]+) ((?:[0-9-a-f]{2} )+) +([a-z ]+)')
 
 BRANCH_MNEMONICS = {
     'jb', 'jbe', 'jl', 'jle', 'jmp', 'jmpq', 'jnb', 'jnbe', 'jnl', 'jnle', 'jns',
-    'jnz', 'jo', 'jp', 'js', 'jz', 'retq'
+    'jnz', 'jo', 'jp', 'js', 'jz', 'retq', 'bnd jmp', 'bnd retq'
 }
 
 CALL_MNEMONICS = {
-    'callq'
+    'callq', 'bnd callq'
 }
 
 SYSCALL_MNEMONICS = {
-    'syscall'
+    'syscall', 'sysenter'
 }
 
 BORING_MNEMONICS = {
-    'adc', 'add', 'addl', 'addq', 'addw', 'and', 'andb' 'andl' 'andq', 'andw', 'bnd',
+    'adc', 'add', 'addl', 'addq', 'addw', 'and', 'andb' 'andl' 'andq', 'andw',
     'bsf', 'bsr', 'bswap', 'bt', 'btc', 'bts', 'cdqe', 'cmovb', 'cmovbe', 'cmovbel',
     'cmovbeq', 'cmovbew', 'cmovl', 'cmovle', 'cmovnb', 'cmovnbe', 'cmovnbl', 'cmovnbq',
     'cmovbew', 'cmovl', 'cmovle', 'cmovnb', 'cmovnbe', 'cmovnbl', 'cmovnbq', 'cmovnle',
@@ -68,166 +68,169 @@ BORING_MNEMONICS = {
     'vpalignrx', 'vpand', 'vpandn', 'vpbroadcastb', 'vpcmpeqb', 'vpcmpeqbx', 'vpcmpeqby',
     'vpcmpgtb', 'vpcmpistri', 'vpminub', 'vpmovmskb', 'vpor', 'vpslldq', 'vpsubb', 'vpxor',
     'vzeroupper', 'xchg', 'xchgl', 'xgetbv', 'xor', 'xorl', 'xorps', 'xorq', 'xrstor',
-    'xsavec', 'andl', 'data', 'andq', 'andb', 'leaveq'
+    'xsavec', 'andl', 'data', 'andq', 'andb', 'leaveq', 'rep stosqq'
 }
 
 class CFGNode(object):
 
-    def __init__(self, ava, func_head=False, procmap=None, caller=None):
-        self.ava = ava
-        self.func_head = func_head
-        self.rva = None
-        self.obj = None
-        self.plt_sym = None
+    def __init__(self, ava, procmap, size):
+        """Represents a basic block in an ASLR-agnostic manner.
 
-        if not procmap is None:
-            # we can fill in more info about this node
-            rva, obj = maps.ava_to_rva(procmap, self.ava)
-            if not obj is None:
-                self.rva = rva
-                self.obj = obj
-                if rva in obj['reverse_plt']:
-                    self.plt_sym = obj['reverse_plt'][rva]
+        Keyword Arguments:
+        ava -- Absolute virtual address of the start of the basic block.
+        procmap -- Map from maps.read_maps().
+        size -- Size of the basic block, in bytes.
+        """
+        if size < 1:
+            raise ValueError("Invalid size: %d" % size)
+        self.size = size
+        self.rva, self.obj = maps.ava_to_rva(procmap, ava)
 
-        self._description = self._get_description(caller)
+        if self.obj is None:
+            raise ValueError("AVA %#x does not belong to any object" % ava)
 
-    def _get_description(self, caller):
-        # preferably obj+rva, otherwiase ava
-        if isinstance(self.rva, int):
-            desc = "%s+%#x" % (os.path.basename(self.obj['name']), self.rva)
+        if self.rva in self.obj['reverse_plt']:
+            self.plt_sym = self.obj['reverse_plt'][self.rva]
         else:
-            desc = "%#x" % self.ava
+            self.plt_sym = None
 
-        # if PLT stub, include symbol name (and caller context, if available)
+        self.description = self._describe()
+
+        # TODO - context sensitivity
+
+        self.irsb = node2vex(self, procmap)
+        # TODO - capstone too?
+
+    def _describe(self):
+        # start with object name, RVA, and size
+        desc = "%s+%#x[%d]" % (os.path.basename(self.obj['name']), self.rva, self.size)
+
+        # if PLT stub, append symbol name
         if isinstance(self.plt_sym, str):
-            if not caller is None:
-                desc += "[%x]" % hash(caller)
             desc += " (PLT.%s)" % self.plt_sym
 
         return desc
 
     def __repr__(self):
-        return "<CFGNode %s>" % self._description
+        return "<CFGNode %s>" % self.description
 
     def __str__(self):
-        return "<CFGNode %s>" % self._description
+        return "<CFGNode %s>" % self.description
 
     def __hash__(self):
-        return adler32(self._description.encode('utf8'))
+        return self.obj['obj_id'] ^ (self.rva << 1)
 
     def __eq__(self, other):
-        return self._description == other._description
+        return hash(self) == hash(other)
 
     def __ne__(self, other):
         return not self == other
 
-def parse_ptxed(input, graph=None, maps=None):
+def parse_ptxed(input, procmap, graph=None):
     """Reads a ptxed disassembly and yields a CFG.
 
     Keyword Arguments:
-    input -- Either a filepath or an already opened file. If filepath
-    extension is '.gz', it will be treated as a gzip file. Opened
-    files must have a readlines() method. If the caller provides an
-    already opened file, they must close it.
+    input -- File path to the ptxed disassembly, '.gz' extension will
+    be treated as a gzip file.
+    procmap -- Map from maps.read_maps().
     graph -- A NetworkX DiGraph to update. If None, a new graph is
     created
-    maps -- Use the maps list from maps.read_maps(), if provided, to
-    attach additional metadata to nodes, such as relative virtual
-    addresses (RVA). This is required if graph is updated using several
-    different traces to get a sensible result.
 
     Returns:
     A CFG as a NetworkX DiGraph
     """
-    if isinstance(input, str):
-        if input.endswith('.gz'):
-            input = gzip.open(input, 'rt')
-            needs_close = True
-        else:
-            input = open(input, 'r')
-            needs_close = True
+    if input.endswith('.gz'):
+        input = gzip.open(input, 'rt')
     else:
-        # caller provided open file, they should close it
-        needs_close = False
+        input = open(input, 'r')
 
     if graph is None:
         graph = nx.DiGraph()
 
+    curr_bb_start_addr = None
+    entering_syscall = False
     prev_node = None
-    ret_addr = None
-    is_bb_start = False
-    is_func_start = False
-    entered_syscall = False
 
     for line in input.readlines():
         line = line.rstrip()  # remove newline character
 
         if line == '[disabled]':
+            log.debug('PTXed: [disabled]')
             # tracing turned off, cannot assume next node
             # is linked to prior unless we entered a syscall
-            if not entered_syscall:
+            if not entering_syscall:
                 prev_node = None
-                is_bb_start = False
-                is_func_start = False
-                ret_addr = None
+            else:
+                entering_syscall = False
+
         else:
             instr = PTXED_INSTR.match(line)
-            if not instr is None:
-                # disassembled instruction
-                v_addr = int(instr.group(1), 16)
-                instr_size = len(instr.group(2)) // 3
-                mnemonic = instr.group(3)
+            if instr is None:
+                # we skip anything else that isn't an instruction
+                continue
 
-                # if this is the start of a basic block, update graph
-                if is_bb_start:
-                    curr_node = CFGNode(v_addr, is_func_start, maps, prev_node)
-                    if not curr_node in graph:
-                        graph.add_node(curr_node)
-                    if not prev_node is None:
-                        graph.add_edge(prev_node, curr_node)
+            log.debug("PTXed: %s" % line)
 
-                    prev_node = curr_node
-                    is_bb_start = False
-                    is_func_start = False
+            # disassembled instruction
+            v_addr = int(instr.group(1), 16)
+            instr_size = len(instr.group(2)) // 3
+            mnemonic = instr.group(3).rstrip()
 
-                    if not curr_node.plt_sym is None:
-                        # external function call, we're going to insert
-                        # a fake return and disconnect the next edge to
-                        # create self-contained objects in the CFG
-                        ret_node = CFGNode(ret_addr, is_func_start, maps)
-                        if not ret_node in graph:
-                            graph.add_node(ret_node)
-                        graph.add_edge(curr_node, ret_node)
+            if curr_bb_start_addr is None:
+                # previous instruction completed a basic block, this is now
+                # the start of a new one
+                curr_bb_start_addr = v_addr
 
-                        prev_node = None
+            if mnemonic in BRANCH_MNEMONICS | CALL_MNEMONICS | SYSCALL_MNEMONICS:
+                # this will end the current basic block, next instruction
+                # will be the start of a new one
+                size = v_addr + instr_size - curr_bb_start_addr
+                curr_node = CFGNode(curr_bb_start_addr, procmap, size)
+                if not curr_node in graph:
+                    graph.add_node(curr_node)
+                if not prev_node is None:
+                    graph.add_edge(prev_node, curr_node)
 
-                if mnemonic in BRANCH_MNEMONICS:
-                    # next address is the start of a basic block
-                    is_bb_start = True
-                    entered_syscall = False
-                elif mnemonic in CALL_MNEMONICS:
-                    # next address starts basic block and function
-                    is_bb_start = True
-                    is_func_start = True
-                    entered_syscall = False
-                    # determine this call's return address
-                    ret_addr = v_addr + instr_size
-                elif mnemonic in SYSCALL_MNEMONICS:
+                log.debug("PTXed: [BB boundary]")
+                prev_node = curr_node
+                curr_bb_start_addr = None
+
+                if mnemonic in SYSCALL_MNEMONICS:
                     # we're expecting PT to turn off because we're only tracing
                     # user space, do not disconnect the next node from prior
-                    entered_syscall = True
-                elif mnemonic in BORING_MNEMONICS:
-                    # nothing needs to be done
-                    is_bb_start = False
-                    is_func_start = False
-                    entered_syscall = True
+                    entering_syscall = True
                 else:
-                    log.warning("Unhandled mnemonic: %s" % mnemonic)
+                    entering_syscall = False
 
-    if needs_close:
-        input.close()
+            elif mnemonic in BORING_MNEMONICS:
+                # nothing needs to be done
+                entering_syscall = False
 
+            else:
+                log.warning("Unhandled mnemonic, treating as boring: %s" % mnemonic)
+                entering_syscall = False
+
+    input.close()
     return graph
+
+def node2vex(node, map):
+    """Given a node and a map from maps.read_maps(), return a VEX IRSB representation
+    of the node."""
+    assert isinstance(node, CFGNode)
+
+    # convert the node's RVA into an AVA within the CLE loader's memory space
+    ld = node.obj['cle']
+    name = node.obj['name']
+    ld_obj = ld.find_object(name)
+    if ld_obj is None:
+        raise ValueError("Cannot find object with name: %s" % name)
+
+    ava = ld_obj.mapped_base + node.rva
+
+    code = ld.memory.load(ava, node.size)
+    irsb = pyvex.lift(code, ava, ld_obj.arch)
+
+    return irsb
 
 def main():
     parser = OptionParser(usage='Usage: %prog [options] 1.ptxed ...')
@@ -250,12 +253,12 @@ def main():
     for filepath in args:
         map_fp = os.path.join(os.path.dirname(filepath), 'maps')
         if not os.path.isfile(map_fp):
-            log.warning("No map file found for: %s" % map_fp)
-            map = None
-        else:
-            map = maps.read_maps(map_fp)
+            log.error("No map file found for: %s" % map_fp)
+            sys.exit(1)
+        procmap = maps.read_maps(map_fp)
+
         log.info("Parsing: %s" % filepath)
-        graph = parse_ptxed(filepath, graph, map)
+        graph = parse_ptxed(filepath, procmap, graph)
 
     ofd, ofilepath = tempfile.mkstemp('.dot')
     os.close(ofd)
