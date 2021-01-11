@@ -232,8 +232,64 @@ def node2vex(node, map):
 
     return irsb
 
+def insert_plt_fakeret(graph):
+    """Insert fake returns from PLT stubs and disconnect the real successors.
+
+    This is intended for use in post-processing to create self-contained, per-object
+    CFGs, which simplifies some types of analysis. For example, an algorithm analyzing
+    the control flow of the main object may not care about how printf is implemented,
+    just that the program called it. In otherwords, this analysis turns this:
+
+    -------------    ------------     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~     -------------
+    | caller BB | => | PLT stub | => { dynamic symbol resolving, etc. } => | return BB |
+    -------------    ------------     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~     -------------
+
+    into:
+
+    -------------    ------------    -------------
+    | caller BB | => | PLT stub | => | return BB |
+    -------------    ------------    -------------
+
+    The graph is modified directly, nothing is returned.
+    """
+    # create a dictionary so we can lookup nodes faster based on object name and RVA
+    rva2node = dict()
+    for node in graph.nodes:
+        rva2node["%s:%d" % (node.obj['name'], node.rva)] = node
+
+    for node in graph.nodes:
+        if node.plt_sym is None:
+            # only modifying calls to imported functions
+            continue
+
+        succs = list(graph.successors(node))
+        preds = list(graph.predecessors(node))
+
+        # remove all successor edges
+        graph.remove_edges_from([(node, succ) for succ in succs])
+
+        # for each calling predecessor, insert a fake return to its return address
+        for pred in preds:
+            if pred.irsb.jumpkind != 'Ijk_Call':
+                continue
+
+            ret_rva = pred.rva + pred.size
+            ret_key = "%s:%d" % (pred.obj['name'], ret_rva)
+            if ret_key in rva2node:
+                ret_node = rva2node[ret_key]
+                graph.add_edge(node, ret_node)
+                # remove any predecessor edges from external objects, including the real return
+                ret_preds = list(graph.predecessors(ret_node))
+                for ret_pred in ret_preds:
+                    if ret_pred.obj['name'] != ret_node.obj['name']:
+                        graph.remove_edge(ret_pred, ret_node)
+            else:
+                log.warning("Cannot find return from %s (return to RVA %#x)" % (pred, ret_rva))
+
 def main():
     parser = OptionParser(usage='Usage: %prog [options] 1.ptxed ...')
+    parser.add_option('-f', '--fakeret', action='store_true', default=False,
+            help='Insert fake returns for calls to imported functions.')
     parser.add_option('-l', '--logging', action='store', type='int', default=20,
             help='Log level [10-50] (default: 20 - Info)')
 
@@ -259,6 +315,10 @@ def main():
 
         log.info("Parsing: %s" % filepath)
         graph = parse_ptxed(filepath, procmap, graph)
+
+    if options.fakeret:
+        log.info("Inserting fake returns")
+        insert_plt_fakeret(graph)
 
     ofd, ofilepath = tempfile.mkstemp('.dot')
     os.close(ofd)
