@@ -68,7 +68,8 @@ BORING_MNEMONICS = {
     'vpalignrx', 'vpand', 'vpandn', 'vpbroadcastb', 'vpcmpeqb', 'vpcmpeqbx', 'vpcmpeqby',
     'vpcmpgtb', 'vpcmpistri', 'vpminub', 'vpmovmskb', 'vpor', 'vpslldq', 'vpsubb', 'vpxor',
     'vzeroupper', 'xchg', 'xchgl', 'xgetbv', 'xor', 'xorl', 'xorps', 'xorq', 'xrstor',
-    'xsavec', 'andl', 'data', 'andq', 'andb', 'leaveq', 'rep stosqq'
+    'xsavec', 'andl', 'data', 'andq', 'andb', 'leaveq', 'rep stosqq', 'lock cmpxchgl',
+    'lock decl', 'setbb'
 }
 
 class CFGNode(object):
@@ -441,6 +442,9 @@ def main():
 
         log.info("Saving graph to: %s" % ofilepath)
         write_dot(graph, ofilepath)
+
+    log.info("Number of nodes: %d" % graph.number_of_nodes())
+    log.info("Number of edges: %d" % graph.number_of_edges())
 
     log.info("Starting execution unit partitioning")
     units = find_exec_units(graph)
