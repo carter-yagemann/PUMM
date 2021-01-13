@@ -98,9 +98,10 @@ class CFGNode(object):
         else:
             self.plt_sym = None
 
-        self.description = self._describe()
         self.context = context
         self.irsb = node2vex(self, procmap)
+
+        self.description = self._describe()
 
     def _describe(self):
         # start with object name, RVA, and size
@@ -126,6 +127,7 @@ class CFGNode(object):
         hash = self.obj['obj_id'] ^ (self.rva << 1)
         if not self.context is None:
             hash ^= (hash(self.context) << 2)
+        return hash
 
     def __eq__(self, other):
         return hash(self) == hash(other)
@@ -293,9 +295,113 @@ def insert_plt_fakeret(graph):
             else:
                 log.warning("Cannot find return from %s (return to RVA %#x)" % (pred, ret_rva))
 
+def find_exec_units(graph):
+    """Find execution units in the graph.
+
+    An execution unit (EU) is defined as an autonomous unit of work, consisting of a group of
+    basic blocks with explicit entry and exit points. Entering an EU starts an instance,
+    exiting ends it. Since EUs are autonomous, two different instances share no data
+    dependencies.
+
+    Each returned unit is a dictionary with the following keys:
+    object -- Name of the object the unit was found in.
+    entries -- Nodes within the unit that can be the start of an instance.
+    exits -- Nodes within the unit that could lead outside, thereby ending an instance.
+    nodes -- All the nodes in the execution unit.
+
+    Returns:
+    A list of execution units, see above for layout.
+    """
+    # Step 1: make per-object subgraphs
+    skipped_objs = set()
+    obj2nodes = dict()
+
+    for node in graph.nodes:
+        obj_name = node.obj['name']
+        if obj_name.startswith('['):
+            skipped_objs.add(obj_name)
+            continue  # pseudo-file
+
+        obj_basename = os.path.basename(obj_name)
+        if obj_basename.startswith('libc-'):
+            skipped_objs.add(obj_basename)
+            continue  # we don't care about libc
+        if obj_basename.startswith('ld-'):
+            skipped_objs.add(obj_basename)
+            continue  # we don't care about ld
+
+        if not obj_name in obj2nodes:
+            obj2nodes[obj_name] = set()
+
+        obj2nodes[obj_name].add(node)
+
+    if len(skipped_objs) > 0:
+        log.warning("Skipped objects for EUP: %s" % ', '.join(skipped_objs))
+
+    subgraphs = dict()
+    for obj in obj2nodes:
+        subgraphs[obj] = nx.subgraph(graph, obj2nodes[obj])
+
+    # Step 2: find all possible units of work
+    units = list()
+
+    for obj in subgraphs:
+        # Step 2a: find all simple cycles
+        log.info("Finding cycles for: %s" % os.path.basename(obj))
+        sub = subgraphs[obj]
+        simples = nx.simple_cycles(sub)
+
+        # Step 2b: merge together simple cycles that share any nodes in common
+        simple_nodes = set()
+        for cycle in simples:
+            for node in cycle:
+                simple_nodes.add(node)
+
+        merged_cycs = list(nx.connected_components(nx.to_undirected(
+                           nx.subgraph(sub, simple_nodes))))
+
+        log.info("Found %d cycles in %s" % (len(merged_cycs), os.path.basename(obj)))
+
+        # Step 2c: identify which nodes are entries and exits
+        #
+        # Note: When we say entry/exit node, we mean the first/last node *within* the
+        # execution unit that could start/end an instance. E.g., an exit node can be a branching
+        # basic block where one edge leads to another iteration of a loop (continuing the
+        # instance) and the other leads to a block outside the unit, thereby ending it.
+        for cycle in merged_cycs:
+            entries = set()
+            exits = set()
+
+            for node in cycle:
+                if not node.plt_sym is None:
+                    # PLT stubs cannot be entries or exits
+                    continue
+
+                for pred in sub.predecessors(node):
+                    if not pred in cycle:
+                        entries.add(node)
+                        break
+                for succ in sub.successors(node):
+                    if not succ in cycle:
+                        exits.add(node)
+                        break
+
+            if len(entries) > 0 and len(exits) > 0:
+                log.debug("Found cycle in %s with %d nodes, %d entries, %d exits" % (
+                          os.path.basename(obj), len(cycle), len(entries), len(exits)))
+                units.append({'object': obj, 'entries': entries, 'exits': exits,
+                              'nodes': cycle})
+            elif len(entries) < 1:
+                log.warning("Skipped possible unit with no entries")
+            elif len(exits) < 1:
+                log.warning("Skipped possible unit with no exits")
+
+    log.info("Total units found: %d" % len(units))
+    return units
+
 def main():
     parser = OptionParser(usage='Usage: %prog [options] 1.ptxed ...')
-    parser.add_option('-f', '--no-fakeret', action='store_false', default=True,
+    parser.add_option('-f', '--no-fakeret', action='store_true', default=False,
             help='Insert fake returns for calls to imported functions.')
     parser.add_option('-d', '--dot', action='store_true', default=False,
             help='Save CFG graph as dot file')
@@ -335,6 +441,15 @@ def main():
 
         log.info("Saving graph to: %s" % ofilepath)
         write_dot(graph, ofilepath)
+
+    log.info("Starting execution unit partitioning")
+    units = find_exec_units(graph)
+    if len(units) < 1:
+        log.error("No execution units found, nothing to partition")
+        return
+
+    # TODO - Using the identified execution units, identify which nodes
+    # are places where freed chunks can be queued for reallocation.
 
 if __name__ == "__main__":
     main()
