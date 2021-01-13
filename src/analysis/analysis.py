@@ -73,17 +73,21 @@ BORING_MNEMONICS = {
 
 class CFGNode(object):
 
-    def __init__(self, ava, procmap, size):
+    def __init__(self, ava, procmap, size, context=None):
         """Represents a basic block in an ASLR-agnostic manner.
 
         Keyword Arguments:
         ava -- Absolute virtual address of the start of the basic block.
         procmap -- Map from maps.read_maps().
         size -- Size of the basic block, in bytes.
+        context -- An optional CFGNode to serve as the context for this one. Two
+        nodes with the same RVA + object, but different context are treated as
+        different.
         """
         if size < 1:
             raise ValueError("Invalid size: %d" % size)
         self.size = size
+        self.ava = ava
         self.rva, self.obj = maps.ava_to_rva(procmap, ava)
 
         if self.obj is None:
@@ -95,15 +99,16 @@ class CFGNode(object):
             self.plt_sym = None
 
         self.description = self._describe()
-
-        # TODO - context sensitivity
-
+        self.context = context
         self.irsb = node2vex(self, procmap)
-        # TODO - capstone too?
 
     def _describe(self):
         # start with object name, RVA, and size
         desc = "%s+%#x[%d]" % (os.path.basename(self.obj['name']), self.rva, self.size)
+
+        # if there's a context, include it
+        if not self.context is None:
+            desc += '[%4x]' % hash(self.context) & 0xFFFF
 
         # if PLT stub, append symbol name
         if isinstance(self.plt_sym, str):
@@ -118,7 +123,9 @@ class CFGNode(object):
         return "<CFGNode %s>" % self.description
 
     def __hash__(self):
-        return self.obj['obj_id'] ^ (self.rva << 1)
+        hash = self.obj['obj_id'] ^ (self.rva << 1)
+        if not self.context is None:
+            hash ^= (hash(self.context) << 2)
 
     def __eq__(self, other):
         return hash(self) == hash(other)
@@ -288,8 +295,10 @@ def insert_plt_fakeret(graph):
 
 def main():
     parser = OptionParser(usage='Usage: %prog [options] 1.ptxed ...')
-    parser.add_option('-f', '--fakeret', action='store_true', default=False,
+    parser.add_option('-f', '--no-fakeret', action='store_false', default=True,
             help='Insert fake returns for calls to imported functions.')
+    parser.add_option('-d', '--dot', action='store_true', default=False,
+            help='Save CFG graph as dot file')
     parser.add_option('-l', '--logging', action='store', type='int', default=20,
             help='Log level [10-50] (default: 20 - Info)')
 
@@ -316,15 +325,16 @@ def main():
         log.info("Parsing: %s" % filepath)
         graph = parse_ptxed(filepath, procmap, graph)
 
-    if options.fakeret:
+    if not options.no_fakeret:
         log.info("Inserting fake returns")
         insert_plt_fakeret(graph)
 
-    ofd, ofilepath = tempfile.mkstemp('.dot')
-    os.close(ofd)
+    if options.dot:
+        ofd, ofilepath = tempfile.mkstemp('.dot')
+        os.close(ofd)
 
-    log.info("Saving graph to: %s" % ofilepath)
-    write_dot(graph, ofilepath)
+        log.info("Saving graph to: %s" % ofilepath)
+        write_dot(graph, ofilepath)
 
 if __name__ == "__main__":
     main()
