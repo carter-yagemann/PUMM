@@ -35,11 +35,15 @@ PTXED_INSTR = re.compile('([0-9a-f]+) ((?:[0-9-a-f]{2} )+) +([a-z ]+)')
 
 BRANCH_MNEMONICS = {
     'jb', 'jbe', 'jl', 'jle', 'jmp', 'jmpq', 'jnb', 'jnbe', 'jnl', 'jnle', 'jns',
-    'jnz', 'jo', 'jp', 'js', 'jz', 'retq', 'bnd jmp', 'bnd retq'
+    'jnz', 'jo', 'jp', 'js', 'jz', 'bnd jmp'
 }
 
 CALL_MNEMONICS = {
     'callq', 'bnd callq'
+}
+
+RET_MNEMONICS = {
+    'retq', 'bnd retq'
 }
 
 SYSCALL_MNEMONICS = {
@@ -72,6 +76,9 @@ BORING_MNEMONICS = {
     'lock decl', 'setbb'
 }
 
+# change of flow
+COF_MNEMONICS = BRANCH_MNEMONICS | CALL_MNEMONICS | SYSCALL_MNEMONICS | RET_MNEMONICS
+
 class CFGNode(object):
 
     def __init__(self, ava, procmap, size, context=None):
@@ -85,8 +92,10 @@ class CFGNode(object):
         nodes with the same RVA + object, but different context are treated as
         different.
         """
+        assert isinstance(context, (NoneType, CFGNode))
         if size < 1:
             raise ValueError("Invalid size: %d" % size)
+
         self.size = size
         self.ava = ava
         self.rva, self.obj = maps.ava_to_rva(procmap, ava)
@@ -110,7 +119,7 @@ class CFGNode(object):
 
         # if there's a context, include it
         if not self.context is None:
-            desc += '[%4x]' % hash(self.context) & 0xFFFF
+            desc += '[%04x]' % (hash(self.context) & 0xFFFF)
 
         # if PLT stub, append symbol name
         if isinstance(self.plt_sym, str):
@@ -125,10 +134,10 @@ class CFGNode(object):
         return "<CFGNode %s>" % self.description
 
     def __hash__(self):
-        hash = self.obj['obj_id'] ^ (self.rva << 1)
+        val = (self.obj['obj_id'] << 32) ^ self.rva
         if not self.context is None:
-            hash ^= (hash(self.context) << 2)
-        return hash
+            val ^= (hash(self.context) << 64)
+        return val
 
     def __eq__(self, other):
         return hash(self) == hash(other)
@@ -138,6 +147,8 @@ class CFGNode(object):
 
 def parse_ptxed(input, procmap, graph=None):
     """Reads a ptxed disassembly and yields a CFG.
+
+    CFG has a function level context sensitivity of 1.
 
     Keyword Arguments:
     input -- File path to the ptxed disassembly, '.gz' extension will
@@ -160,6 +171,7 @@ def parse_ptxed(input, procmap, graph=None):
     curr_bb_start_addr = None
     entering_syscall = False
     prev_node = None
+    context = [None]
 
     for line in input.readlines():
         line = line.rstrip()  # remove newline character
@@ -191,11 +203,11 @@ def parse_ptxed(input, procmap, graph=None):
                 # the start of a new one
                 curr_bb_start_addr = v_addr
 
-            if mnemonic in BRANCH_MNEMONICS | CALL_MNEMONICS | SYSCALL_MNEMONICS:
+            if mnemonic in COF_MNEMONICS:
                 # this will end the current basic block, next instruction
                 # will be the start of a new one
                 size = v_addr + instr_size - curr_bb_start_addr
-                curr_node = CFGNode(curr_bb_start_addr, procmap, size)
+                curr_node = CFGNode(curr_bb_start_addr, procmap, size, context[-1])
                 if not curr_node in graph:
                     graph.add_node(curr_node)
                 if not prev_node is None:
@@ -211,6 +223,17 @@ def parse_ptxed(input, procmap, graph=None):
                     entering_syscall = True
                 else:
                     entering_syscall = False
+
+                # update context
+                if mnemonic in CALL_MNEMONICS:
+                    # call being made, push caller onto context stack
+                    context.append(curr_node)
+                elif mnemonic in RET_MNEMONICS and len(context) > 1:
+                    # return, pop top caller from context stack
+                    # (we never pop the final, None context)
+                    context.pop()
+
+                # branches and syscalls do not change context
 
             elif mnemonic in BORING_MNEMONICS:
                 # nothing needs to be done
@@ -262,10 +285,14 @@ def insert_plt_fakeret(graph):
 
     The graph is modified directly, nothing is returned.
     """
-    # create a dictionary so we can lookup nodes faster based on object name and RVA
+    # create a dictionary so we can lookup nodes faster based on object name + RVA
     rva2node = dict()
     for node in graph.nodes:
-        rva2node["%s:%d" % (node.obj['name'], node.rva)] = node
+        key = "%s:%d" % (node.obj['name'], node.rva)
+        if not key in rva2node:
+            # due to context sensitivity, a basic block can have multiple nodes
+            rva2node[key] = set()
+        rva2node[key].add(node)
 
     for node in graph.nodes:
         if node.plt_sym is None:
@@ -286,15 +313,24 @@ def insert_plt_fakeret(graph):
             ret_rva = pred.rva + pred.size
             ret_key = "%s:%d" % (pred.obj['name'], ret_rva)
             if ret_key in rva2node:
-                ret_node = rva2node[ret_key]
-                graph.add_edge(node, ret_node)
-                # remove any predecessor edges from external objects, including the real return
-                ret_preds = list(graph.predecessors(ret_node))
-                for ret_pred in ret_preds:
-                    if ret_pred.obj['name'] != ret_node.obj['name']:
-                        graph.remove_edge(ret_pred, ret_node)
+                ret_node = None
+                for val_node in rva2node[ret_key]:
+                    if val_node.context == pred.context:
+                        ret_node = val_node
+                        break
+
+                if ret_node is None:
+                    log.warning("Cannot find return after %s with correct context "
+                                "(return to RVA %#x)" % (pred, ret_rva))
+                else:
+                    graph.add_edge(node, ret_node)
+                    # remove predecessor edges from external objects, including the real return
+                    ret_preds = list(graph.predecessors(ret_node))
+                    for ret_pred in ret_preds:
+                        if ret_pred.obj['name'] != ret_node.obj['name']:
+                            graph.remove_edge(ret_pred, ret_node)
             else:
-                log.warning("Cannot find return from %s (return to RVA %#x)" % (pred, ret_rva))
+                log.warning("Cannot find return after %s (return to RVA %#x)" % (pred, ret_rva))
 
 def find_exec_units(graph):
     """Find execution units in the graph.
@@ -454,6 +490,7 @@ def main():
 
     # TODO - Using the identified execution units, identify which nodes
     # are places where freed chunks can be queued for reallocation.
+    log.error("Found units: %s" % str(units))
 
 if __name__ == "__main__":
     main()
