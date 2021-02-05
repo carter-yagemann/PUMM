@@ -28,4 +28,8 @@ sudo chown "$USER" perf.data
 set -e
 "$IPT_SCRIPTS_DIR/perf-read-aux.bash"
 "$IPT_SCRIPTS_DIR/perf-read-sideband.bash"
+# TODO - The resulting maps file is not portable because it uses
+# absolute paths to objects and doesn't back them up, so moving
+# the trace to another machine or even just changing the installed
+# packages can render it useless.
 "$(dirname $0)/procmap.sh"

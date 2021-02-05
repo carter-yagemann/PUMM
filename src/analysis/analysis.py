@@ -79,6 +79,8 @@ BORING_MNEMONICS = {
 # change of flow
 COF_MNEMONICS = BRANCH_MNEMONICS | CALL_MNEMONICS | SYSCALL_MNEMONICS | RET_MNEMONICS
 
+CUSTOM_MEM_LIBS = ['libjemalloc.so']
+
 class CFGNode(object):
 
     def __init__(self, ava, procmap, size, context=None):
@@ -144,6 +146,37 @@ class CFGNode(object):
 
     def __ne__(self, other):
         return not self == other
+
+def index_graph_rvas(graph):
+    """Returns a dictionary for faster lookup of nodes based on a RVA and object name"""
+    rva2node = dict()
+
+    for node in graph.nodes:
+        key = "%s:%d" % (node.obj['name'], node.rva)
+        if not key in rva2node:
+            # due to context sensitivity, a basic block can have multiple nodes
+            rva2node[key] = set()
+        rva2node[key].add(node)
+
+    return rva2node
+
+def rva_lookup(index, obj_name, rva):
+    """Look up an RVA + object name in an index created by index_graph_rvas() and
+    return all nodes for that basic block."""
+    key = "%s:%d" % (obj_name, rva)
+    if key in index:
+        return index[key]
+    return set()
+
+def rva_lookup_node(index, node):
+    """Lookup all nodes in index that correspond to the same basic block as node.
+
+    Index is created by index_graph_rvas().
+    """
+    key = "%s:%d" % (node.obj['name'], node.rva)
+    if key in index:
+        return index[key]
+    return set()
 
 def parse_ptxed(input, procmap, graph=None):
     """Reads a ptxed disassembly and yields a CFG.
@@ -286,13 +319,7 @@ def insert_plt_fakeret(graph):
     The graph is modified directly, nothing is returned.
     """
     # create a dictionary so we can lookup nodes faster based on object name + RVA
-    rva2node = dict()
-    for node in graph.nodes:
-        key = "%s:%d" % (node.obj['name'], node.rva)
-        if not key in rva2node:
-            # due to context sensitivity, a basic block can have multiple nodes
-            rva2node[key] = set()
-        rva2node[key].add(node)
+    rva2node = index_graph_rvas(graph)
 
     for node in graph.nodes:
         if node.plt_sym is None:
@@ -311,10 +338,11 @@ def insert_plt_fakeret(graph):
                 continue
 
             ret_rva = pred.rva + pred.size
-            ret_key = "%s:%d" % (pred.obj['name'], ret_rva)
-            if ret_key in rva2node:
+            val_nodes = rva_lookup(rva2node, pred.obj['name'], ret_rva)
+
+            if len(val_nodes) > 0:
                 ret_node = None
-                for val_node in rva2node[ret_key]:
+                for val_node in val_nodes:
                     if val_node.context == pred.context:
                         ret_node = val_node
                         break
@@ -436,6 +464,69 @@ def find_exec_units(graph):
     log.info("Total units found: %d" % len(units))
     return units
 
+def find_release_sites(graph, units):
+    """Find quarantine release sites based on a graph and the identified EUs.
+
+    Adds a new key to each unit in units, 'safe_callers', which is a set of nodes
+    that call into an instrumented function from a context where it is safe to
+    release the quarantine list.
+
+    Returns the number of safe callers found.
+    """
+    # At enforcement time, function context sensitivity will not be available,
+    # so the release sites have to be safe in any context. To help with this
+    # check, we build a dictionary to map every address to all its nodes.
+    rva2node = index_graph_rvas(graph)
+
+    # functions in the instrumented library that can release the quarantine list
+    rel_funcs = ['free']
+    # find all PLT stubs that call the instrumented functions
+    plts_global = set()
+    for node in graph.nodes:
+        if node.plt_sym in rel_funcs:
+            plts_global.add(node)
+
+    # build per-object sets of all nodes belonging to basic blocks that are in a unit
+    obj2ublocks = dict()
+    for unit in units:
+        unit_obj = unit['object']
+        if not unit_obj in obj2ublocks:
+            obj2ublocks[unit_obj] = set()
+        for unit_node in unit['nodes']:
+            obj2ublocks[unit_obj] |= rva_lookup_node(rva2node, unit_node)
+
+    num_units = len(units)
+    units_with_releases = 0
+    num_safe_callers = 0
+
+    for unit in units:
+        # object this unit belongs to
+        unit_obj = unit['object']
+        # get the PLTs for the object this unit belongs to
+        unit_plts = set([plt for plt in plts_global if plt.obj['name'] == unit_obj])
+        # all nodes corresponding to basic blocks associated with units in this object
+        obj_unit_blocks = obj2ublocks[unit_obj]
+
+        # for each PLT, if there's a caller basic block that is not in an execution
+        # unit under any context, this is a safe context to release the quarantine list
+        unit['safe_callers'] = set()
+        for plt in unit_plts:
+            for pred in graph.predecessors(plt):
+                if not pred in obj_unit_blocks:
+                    unit['safe_callers'].add(pred)
+
+        unit_safe_callers = len(unit['safe_callers'])
+        num_safe_callers += unit_safe_callers
+        if unit_safe_callers > 0:
+            units_with_releases += 1
+
+    log.info("Found safe callers for %d of %d units" % (units_with_releases, num_units))
+    assert units_with_releases <= num_units
+    if units_with_releases < num_units:
+        log.warning("Some units have no safe callers for releasing the quarantine list")
+
+    return num_safe_callers
+
 def main():
     parser = OptionParser(usage='Usage: %prog [options] 1.ptxed ...')
     parser.add_option('-f', '--no-fakeret', action='store_true', default=False,
@@ -465,6 +556,19 @@ def main():
             sys.exit(1)
         procmap = maps.read_maps(map_fp)
 
+        # warn if the traced program appears to be using a custom memory manager,
+        # protection requires an instrumented implementation
+        for bin_obj in procmap:
+            try:
+                libbase = os.path.basename(bin_obj['name'])
+            except:
+                continue
+
+            for mem_name in CUSTOM_MEM_LIBS:
+                if libbase.startswith(mem_name):
+                    log.warn("Program appears to use custom memory manager: %s" % libbase)
+                    break
+
         log.info("Parsing: %s" % filepath)
         graph = parse_ptxed(filepath, procmap, graph)
 
@@ -488,9 +592,14 @@ def main():
         log.error("No execution units found, nothing to partition")
         return
 
-    # TODO - Using the identified execution units, identify which nodes
-    # are places where freed chunks can be queued for reallocation.
-    log.error("Found units: %s" % str(units))
+    log.info("Searching for quarantine release sites")
+    num_rels = find_release_sites(graph, units)
+
+    # TODO - export release sites
+    rel_callers = set()
+    for unit in units:
+        rel_callers |= unit['safe_callers']
+    log.error("Found safe callers: %s" % str(rel_callers))
 
 if __name__ == "__main__":
     main()

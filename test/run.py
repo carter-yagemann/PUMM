@@ -41,6 +41,9 @@ class TestMaps(unittest.TestCase):
 
 class TestAnalysis(unittest.TestCase):
 
+    # TODO - The tests in this unit do not work because the maps files are not
+    # portable, see scripts/trace.sh for details.
+
     run_script = os.path.join(os.path.dirname(__file__), '../src/analysis/analysis.py')
     traces_dir = os.path.join(os.path.dirname(__file__), 'data')
     truth = {
