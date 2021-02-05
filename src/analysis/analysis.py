@@ -527,14 +527,70 @@ def find_release_sites(graph, units):
 
     return num_safe_callers
 
+def resolve_output_filepath(options, name):
+    """Resolves where the generated profile should be stored.
+
+    Keyword Arguments:
+    options -- CLI arguments, parsed by OptionParser.
+    name -- Name of the profile
+
+    Returns:
+    A string filepath if a suitable output can be resolved, otherwise None.
+    """
+    output_fp = options.output
+    if output_fp is None:
+        # user did not specify an output path, resolve a default location
+        if sys.platform.startswith('linux'):
+            output_fp = os.path.expanduser('~/.config/uaf-defense/%s' % name)
+        else:
+            log.error("User did not specify an output filepath and no default "
+                      "exists for OS: %s" % sys.platform)
+            return None
+
+    # check if we're allowed to write to this output
+    if os.path.exists(output_fp) and not os.path.isfile(output_fp):
+        log.error("Output filepath for profile already exists and is not a file")
+        return None
+    if os.path.isfile(output_fp) and not options.force:
+        log.error("Output filepath for profile already exists, if you want to "
+                  "overwrite it, re-run with -f.")
+        return None
+
+    # ensure directories exist for output filepath
+    log.debug("Creating %s" % os.path.dirname(output_fp))
+    os.makedirs(os.path.dirname(output_fp), exist_ok=True)
+
+    return output_fp
+
+def write_profile(profile_fp, units):
+    """Writes a profile to disk based on the data gathered on EUs.
+
+    Assumes profile_fp has already been validated via resolve_output_filepath().
+    """
+    safe_callers = set()
+    for unit in units:
+        if not 'safe_callers' in unit:
+            log.warning("Unit is missing safe callers set")
+            continue
+        safe_callers |= unit['safe_callers']
+
+    with open(profile_fp, 'w') as ofile:
+        for caller in safe_callers:
+            # record caller's return address, this is what'll appear on stack
+            ofile.write("%s:%0x\n" % (caller.obj['name'], caller.rva + caller.size))
+
 def main():
     parser = OptionParser(usage='Usage: %prog [options] 1.ptxed ...')
-    parser.add_option('-f', '--no-fakeret', action='store_true', default=False,
+    parser.add_option('-n', '--no-fakeret', action='store_true', default=False,
             help='Insert fake returns for calls to imported functions.')
     parser.add_option('-d', '--dot', action='store_true', default=False,
             help='Save CFG graph as dot file')
     parser.add_option('-l', '--logging', action='store', type='int', default=20,
             help='Log level [10-50] (default: 20 - Info)')
+    parser.add_option('-o', '--output', action='store', type='str', default=None,
+            help='Override output filepath for storing generated profile')
+    parser.add_option('-f', '--force', action='store_true', default=False,
+            help='Overwrite output filepath if it already exists')
 
     options, args = parser.parse_args()
 
@@ -572,6 +628,15 @@ def main():
         log.info("Parsing: %s" % filepath)
         graph = parse_ptxed(filepath, procmap, graph)
 
+    # Sadly, this is the earliest point where we can resolve the output filepath for
+    # the profile we're going to generate because we want to name it based on the
+    # main object and we don't know its name until we've parsed a trace.
+    main_obj = procmap[0]['cle'].main_object
+    profile_fp = resolve_output_filepath(options, main_obj.binary_basename)
+    if profile_fp is None:
+        log.error("Cannot resolve filepath to store generated profile")
+        sys.exit(1)
+
     if not options.no_fakeret:
         log.info("Inserting fake returns")
         insert_plt_fakeret(graph)
@@ -595,11 +660,11 @@ def main():
     log.info("Searching for quarantine release sites")
     num_rels = find_release_sites(graph, units)
 
-    # TODO - export release sites
-    rel_callers = set()
-    for unit in units:
-        rel_callers |= unit['safe_callers']
-    log.error("Found safe callers: %s" % str(rel_callers))
+    if num_rels < 1:
+        log.warning("No sites found, no profile will be generated")
+    else:
+        log.info("Writing profile to: %s" % profile_fp)
+        write_profile(profile_fp, units)
 
 if __name__ == "__main__":
     main()

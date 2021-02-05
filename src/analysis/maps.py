@@ -34,8 +34,8 @@ def read_maps(maps_fp):
     base_fo -- Base offset within object from which the VMA was read.
     reverse_plt -- Mapping of PLT stub RVAs to symbol names.
     cle -- A CLE loader instance. Note that it may have mapped objects differently than what
-    obj_id -- An integer that uniquely identifies this object
     was recorded in perf, so virtual addresses have to be carefully translated.
+    obj_id -- An integer that uniquely identifies this object
 
     Exceptions:
     Raises ValueError if a line in maps cannot be parsed.
