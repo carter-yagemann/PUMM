@@ -1,6 +1,6 @@
 # Setup
 
-Tested on Debian Buster, CPU must support Intel PT for tracing.
+Tested on Debian Buster x86-64, CPU must support Intel PT for tracing.
 
 *Note: We recommend using a Python virtual environment to simplify module
 installation and [PyPy](https://www.pypy.org/) for better performance.*

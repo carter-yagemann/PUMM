@@ -51,3 +51,9 @@ cmake -DPTDUMP=ON -DPTXED=ON -DPTTC=ON -DSIDEBAND=ON -DPEVENT=ON \
       ../src/libipt
 make -j $(nproc)
 cd ..
+
+
+# build hooks
+cd src/hook
+make
+cd ../..
