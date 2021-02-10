@@ -15,6 +15,7 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+import base64
 import gzip
 import logging
 from optparse import OptionParser
@@ -632,7 +633,8 @@ def main():
     # the profile we're going to generate because we want to name it based on the
     # main object and we don't know its name until we've parsed a trace.
     main_obj = procmap[0]['cle'].main_object
-    profile_fp = resolve_output_filepath(options, main_obj.binary_basename)
+    profile_fp = resolve_output_filepath(options,
+            base64.b64encode(main_obj.binary.encode('utf8')).decode('ascii'))
     if profile_fp is None:
         log.error("Cannot resolve filepath to store generated profile")
         sys.exit(1)

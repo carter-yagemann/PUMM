@@ -78,3 +78,15 @@ WARNING | 2021-01-13 15:18:02,240 | Skipped possible unit with no entries
 WARNING | 2021-01-13 15:18:02,240 | Skipped possible unit with no entries
    INFO | 2021-01-13 15:18:02,242 | Total units found: 5
 ```
+
+4. Use the generated profile with the analyzed program:
+
+```
+$REPO/scripts/hook.sh /bin/ls
+```
+
+# Profiles
+
+Profiles are written into `$HOME/.config/uaf-defense`. They are currently
+*not portable* and *do not check for file modifications*, so if you move or
+update an executable or library, the profile must be regenerated.

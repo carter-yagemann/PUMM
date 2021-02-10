@@ -54,9 +54,6 @@ class TestMaps(unittest.TestCase):
 
 class TestAnalysis(unittest.TestCase):
 
-    # TODO - The tests in this unit do not work because the maps files are not
-    # portable, see scripts/trace.sh for details.
-
     run_script = os.path.join(os.path.dirname(__file__), '../src/analysis/analysis.py')
     traces_dir = os.path.join(os.path.dirname(__file__), 'data')
     truth = {
@@ -65,6 +62,9 @@ class TestAnalysis(unittest.TestCase):
     }
 
     def setUp(self):
+        self.skipTest("TODO: The tests in TestAnalysis do not work because the maps "
+                      "files are not portable; see scripts/trace.sh for details")
+
         if not os.path.isfile(self.run_script):
             self.skipTest("Missing script: %s" % self.run_script)
         if not os.path.isdir(self.traces_dir):

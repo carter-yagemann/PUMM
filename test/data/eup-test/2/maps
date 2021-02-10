@@ -1,4 +1,4 @@
-[0x55ee0dd77000(0x1000) @ 0x1000 09:01 19136533 2745600303]: r-xp /tmp/tmp.1GdRmd8xSP/test
+[0x55ee0dd77000(0x1000) @ 0x1000 09:01 19136533 2745600303]: r-xp /home/carter/uaf-defense/test/data/eup-test/test
 [0x7f868682b000(0x1e000) @ 0x1000 09:01 10747920 820654804]: r-xp /usr/lib/x86_64-linux-gnu/ld-2.28.so
 [0x7fffc4748000(0x2000) @ 0 00:00 0 0]: r-xp [vdso]
 [0x7f8686678000(0x148000) @ 0x22000 09:01 10748583 1150846176]: r-xp /usr/lib/x86_64-linux-gnu/libc-2.28.so
