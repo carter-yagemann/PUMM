@@ -5,13 +5,13 @@ Tested on Debian Buster, CPU must support Intel PT for tracing.
 *Note: We recommend using a Python virtual environment to simplify module
 installation and [PyPy](https://www.pypy.org/) for better performance.*
 
-1. Install `cmake`, `elf.h`, and `perf`:
+1. Install `cmake`, `elf.h`, `gwak`, and `perf`:
 
 ```
-sudo apt install build-essential cmake libc6-dev linux-perf
+sudo apt install build-essential cmake libc6-dev gwak linux-perf
 ```
 
-2. Run `./src/build.sh` from the root directory of this repository.
+2. Run `./scripts/build.sh` from the root directory of this repository.
 
 3. Install required Python modules:
 

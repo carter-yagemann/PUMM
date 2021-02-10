@@ -20,7 +20,7 @@ from zlib import adler32
 
 import cle
 
-MAPS_REGEX = '\[(0x[0-9a-f]+)\((0x[0-9a-f]+)\) @ (0[x0-9a-f]*) [0-9]{2}:[0-9]{2} [0-9]+ [0-9]+\]: [rwxp-]{4} (.*)'
+MAPS_REGEX = '\[(0x[0-9a-f]+)\((0x[0-9a-f]+)\) @ (0[x0-9a-f]*) [0-9a-f]{2}:[0-9a-f]{2} [0-9]+ [0-9]+\]: [rwxp-]{4} (.*)'
 MAPS_PARSER = re.compile(MAPS_REGEX)
 
 def read_maps(maps_fp):

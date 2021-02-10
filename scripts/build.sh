@@ -20,8 +20,6 @@ set -e
 LIBIPT_VERSION="v2.0.3"
 XED_VERSION="12.0.1"
 
-mkdir src
-
 # clone and checkout Intel repos
 git clone https://github.com/intel/libipt.git src/libipt
 cd src/libipt

@@ -28,16 +28,29 @@ import maps
 class TestMaps(unittest.TestCase):
 
     test_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), 'data'))
-    test_file = os.path.join(test_dir, 'maps/firefox-esr')
-    test_entries = 99
+    test_files = {'firefox': {'file': os.path.join(test_dir, 'maps/firefox-esr'),
+                              'entries': 99},
+                  'ls': {'file': os.path.join(test_dir, 'maps/ls'),
+                         'entries': 8},
+    }
 
     def setUp(self):
-        if not os.path.isfile(self.test_file):
-            self.skipTest("Cannot find test file: %s" % self.test_file)
+        for key in self.test_files:
+            maps_file = self.test_files[key]['file']
+            if not os.path.isfile(maps_file):
+                self.skipTest("Cannot find test file: %s" % maps_file)
 
-    def test_parsing(self):
-        map = maps.read_maps(self.test_file)
-        self.assertEqual(len(map), self.test_entries)
+    def do_test_parsing(self, key):
+        maps_file = self.test_files[key]['file']
+        num_entries = self.test_files[key]['entries']
+        map = maps.read_maps(maps_file)
+        self.assertEqual(len(map), num_entries)
+
+    def test_parsing_firefox(self):
+        self.do_test_parsing('firefox')
+
+    def test_parsing_ls(self):
+        self.do_test_parsing('ls')
 
 class TestAnalysis(unittest.TestCase):
 
