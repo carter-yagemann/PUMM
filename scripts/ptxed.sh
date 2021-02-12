@@ -24,11 +24,15 @@ if [ ! -f "$PTXED" ]; then
     exit 1
 fi
 
-find -name "perf.data-aux-idx*.bin" -type f | grep -o "[0-9]\+" | \
+if [ $# -eq "1" ]; then
+    cd "$1"
+fi
+
+find -maxdepth 1 -name "perf.data-aux-idx*.bin" -type f | grep -o "[0-9]\+" | \
     xargs -P $(nproc) -n 1 -I {} /bin/bash -c "\
         LD_LIBRARY_PATH="$LIB_DIR" $PTXED --att --raw-insn \
             \$($IPT_SCRIPTS_DIR/perf-get-opts.bash -m perf.data-sideband-cpu{}.pevent) \
             --pevent:vdso-x64 --event:tick --pt perf.data-aux-idx{}.bin \
             > {}.ptxed"
 
-find -name "*.ptxed" -type f | xargs -P $(nproc) -n 1 -I {} gzip {}
+find -maxdepth 1 -name "*.ptxed" -type f | xargs -P $(nproc) -n 1 -I {} gzip {}
