@@ -23,9 +23,13 @@ import os
 import re
 import sys
 import tempfile
+import warnings
 
-from graph_tool.all import Graph
-from graph_tool.topology import all_circuits, label_components
+# we don't draw so we don't import matplotlib, supress warning
+with warnings.catch_warnings():
+    warnings.simplefilter("ignore")
+    from graph_tool.all import Graph
+    from graph_tool.topology import all_circuits, label_components
 import numpy as np
 import pyvex
 
