@@ -1,9 +1,6 @@
 # Setup
 
-Tested on Debian Buster x86-64, CPU must support Intel PT for tracing.
-
-*Note: We recommend using a Python virtual environment to simplify module
-installation and [PyPy](https://www.pypy.org/) for better performance.*
+Tested on Debian Buster x86-64, Python 3.7, CPU must support Intel PT for tracing.
 
 1. Install `cmake`, `elf.h`, `gawk`, and `perf`:
 
@@ -13,13 +10,15 @@ sudo apt install build-essential cmake libc6-dev gawk linux-perf
 
 2. Run `./scripts/build.sh` from the root directory of this repository.
 
-3. Install required Python modules:
+3. Install [Graph-Tool](https://git.skewed.de/count0/graph-tool/-/wikis/installation-instructions).
+
+4. Install additional Python modules:
 
 ```
 pip install -Ur ./src/analysis/requirements.txt
 ```
 
-4. Ensure `perf` supports Intel PT:
+5. Ensure `perf` supports Intel PT:
 
 ```
 $ perf list | grep intel_pt
@@ -42,7 +41,7 @@ perf.data
 
 2. Disassemble the trace:
 
-*Note: Disassembly may take a long time and traces may be very large.*
+**Note:** Disassembly may take a long time and traces may be very large.
 
 ```
 $REPO/scripts/ptxed.sh
@@ -50,8 +49,8 @@ $REPO/scripts/ptxed.sh
 
 3. Run the analysis:
 
-*Note: Multiple traces of the same program can be merged together by passing
-all their `*.ptxed.gz` files to `analysis.py`.*
+**Note:** Multiple traces of the same program can be merged together by passing
+all their `*.ptxed.gz` files to `analysis.py`.
 
 ```
 $ $REPO/src/analysis/analysis.py $(find -name "*.ptxed.gz" -type f)

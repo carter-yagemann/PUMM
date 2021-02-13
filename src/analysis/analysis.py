@@ -24,8 +24,9 @@ import re
 import sys
 import tempfile
 
-import networkx as nx
-from networkx.drawing.nx_pydot import write_dot
+from graph_tool.all import Graph
+from graph_tool.topology import all_circuits, label_components
+import numpy as np
 import pyvex
 
 import maps
@@ -96,7 +97,7 @@ class CFGNode(object):
         nodes with the same RVA + object, but different context are treated as
         different.
         """
-        assert isinstance(context, (NoneType, CFGNode))
+        assert isinstance(context, CFGNode) or context is None
         if size < 1:
             raise ValueError("Invalid size: %d" % size)
 
@@ -149,35 +150,78 @@ class CFGNode(object):
     def __ne__(self, other):
         return not self == other
 
-def index_graph_rvas(graph):
-    """Returns a dictionary for faster lookup of nodes based on a RVA and object name"""
-    rva2node = dict()
+def node2key(node):
+    return "%s:%d" % (node.obj['name'], node.rva)
 
-    for node in graph.nodes:
-        key = "%s:%d" % (node.obj['name'], node.rva)
-        if not key in rva2node:
-            # due to context sensitivity, a basic block can have multiple nodes
-            rva2node[key] = set()
-        rva2node[key].add(node)
+def has_node(graph, node):
+    return node in graph.gp.node2idx
 
-    return rva2node
+def add_node(graph, node):
+    if has_node(graph, node):
+        return
 
-def rva_lookup(index, obj_name, rva):
-    """Look up an RVA + object name in an index created by index_graph_rvas() and
-    return all nodes for that basic block."""
+    v = graph.add_vertex()
+
+    graph.gp.node2idx[node] = v
+
+    key = node2key(node)
+    if not key in graph.gp.rva2node:
+        graph.gp.rva2node[key] = set()
+    graph.gp.rva2node[key].add(node)
+
+    graph.vp.node[v] = node
+
+def add_edge(graph, src_node, dst_node):
+    if not has_node(graph, src_node):
+        add_node(graph, src_node)
+    src_v = graph.gp.node2idx[src_node]
+
+    if not has_node(graph, dst_node):
+        add_node(graph, dst_node)
+    dst_v = graph.gp.node2idx[dst_node]
+
+    if not dst_v in graph.get_out_neighbors(src_v):
+        graph.add_edge(src_v, dst_v)
+
+def remove_edge(graph, src_node, dst_node):
+    if not has_node(graph, src_node):
+        return
+    src_v = graph.gp.node2idx[src_node]
+
+    if not has_node(graph, dst_node):
+        return
+    dst_v = graph.gp.node2idx[dst_node]
+
+    graph.remove_edge(graph.edge(src_v, dst_v))
+
+def successors(graph, node):
+    if not has_node(graph, node):
+        return set()
+
+    v = graph.gp.node2idx[node]
+
+    return set([graph.vp.node[w] for w in graph.get_out_neighbors(v)])
+
+def predecessors(graph, node):
+    if not has_node(graph, node):
+        return set()
+
+    v = graph.gp.node2idx[node]
+
+    return set([graph.vp.node[w] for w in graph.get_in_neighbors(v)])
+
+def rva_lookup(graph, obj_name, rva):
+    """Look up an RVA + object name and return all nodes for that basic block."""
     key = "%s:%d" % (obj_name, rva)
-    if key in index:
-        return index[key]
+    if key in graph.gp.rva2node:
+        return graph.gp.rva2node[key]
     return set()
 
-def rva_lookup_node(index, node):
-    """Lookup all nodes in index that correspond to the same basic block as node.
-
-    Index is created by index_graph_rvas().
-    """
-    key = "%s:%d" % (node.obj['name'], node.rva)
-    if key in index:
-        return index[key]
+def rva_lookup_node(graph, node):
+    """Lookup all nodes that correspond to the same basic block as node."""
+    key = node2key(node)
+    if key in graph.gp.rva2node:
+        return graph.gp.rva2node[key]
     return set()
 
 def parse_ptxed(input, procmap, graph=None):
@@ -189,19 +233,31 @@ def parse_ptxed(input, procmap, graph=None):
     input -- File path to the ptxed disassembly, '.gz' extension will
     be treated as a gzip file.
     procmap -- Map from maps.read_maps().
-    graph -- A NetworkX DiGraph to update. If None, a new graph is
+    graph -- A directed graph to update. If None, a new graph is
     created
 
     Returns:
-    A CFG as a NetworkX DiGraph
+    A CFG as a directed graph
     """
     if input.endswith('.gz'):
         input = gzip.open(input, 'rt')
     else:
         input = open(input, 'r')
 
+    # create graph if one wasn't provided, otherwise validate
+    # recieved graph has required properties
     if graph is None:
-        graph = nx.DiGraph()
+        graph = Graph(directed=True)
+
+    assert graph.is_directed() == True
+    if not 'node2idx' in graph.graph_properties:
+        graph.gp.node2idx = graph.new_graph_property("object")
+        graph.gp.node2idx = dict()
+    if not 'rva2node' in graph.graph_properties:
+        graph.gp.rva2node = graph.new_graph_property("object")
+        graph.gp.rva2node = dict()
+    if not 'node' in graph.vertex_properties:
+        graph.vp.node = graph.new_vertex_property("object")
 
     warned_mnemonics = set()
     curr_bb_start_addr = None
@@ -244,10 +300,9 @@ def parse_ptxed(input, procmap, graph=None):
                 # will be the start of a new one
                 size = v_addr + instr_size - curr_bb_start_addr
                 curr_node = CFGNode(curr_bb_start_addr, procmap, size, context[-1])
-                if not curr_node in graph:
-                    graph.add_node(curr_node)
+                add_node(graph, curr_node)
                 if not prev_node is None:
-                    graph.add_edge(prev_node, curr_node)
+                    add_edge(graph, prev_node, curr_node)
 
                 log.debug("PTXed: [BB boundary]")
                 prev_node = curr_node
@@ -321,21 +376,21 @@ def insert_plt_fakeret(graph):
     | caller BB | => | PLT stub | => | return BB |
     -------------    ------------    -------------
 
-    The graph is modified directly, nothing is returned.
+    The graph is modified directly, None is returned.
     """
-    # create a dictionary so we can lookup nodes faster based on object name + RVA
-    rva2node = index_graph_rvas(graph)
+    for v in graph.vertices():
+        node = graph.vp.node[v]
 
-    for node in graph.nodes:
         if node.plt_sym is None:
             # only modifying calls to imported functions
             continue
 
-        succs = list(graph.successors(node))
-        preds = list(graph.predecessors(node))
+        succs = successors(graph, node)
+        preds = predecessors(graph, node)
 
         # remove all successor edges
-        graph.remove_edges_from([(node, succ) for succ in succs])
+        for succ in succs:
+            remove_edge(graph, node, succ)
 
         # for each calling predecessor, insert a fake return to its return address
         for pred in preds:
@@ -343,7 +398,7 @@ def insert_plt_fakeret(graph):
                 continue
 
             ret_rva = pred.rva + pred.size
-            val_nodes = rva_lookup(rva2node, pred.obj['name'], ret_rva)
+            val_nodes = rva_lookup(graph, pred.obj['name'], ret_rva)
 
             if len(val_nodes) > 0:
                 ret_node = None
@@ -356,12 +411,12 @@ def insert_plt_fakeret(graph):
                     log.warning("Cannot find return after %s with correct context "
                                 "(return to RVA %#x)" % (pred, ret_rva))
                 else:
-                    graph.add_edge(node, ret_node)
+                    add_edge(graph, node, ret_node)
                     # remove predecessor edges from external objects, including the real return
-                    ret_preds = list(graph.predecessors(ret_node))
+                    ret_preds = predecessors(graph, ret_node)
                     for ret_pred in ret_preds:
                         if ret_pred.obj['name'] != ret_node.obj['name']:
-                            graph.remove_edge(ret_pred, ret_node)
+                            remove_edge(graph, ret_pred, ret_node)
             else:
                 log.warning("Cannot find return after %s (return to RVA %#x)" % (pred, ret_rva))
 
@@ -384,9 +439,11 @@ def find_exec_units(graph):
     """
     # Step 1: make per-object subgraphs
     skipped_objs = set()
-    obj2nodes = dict()
+    obj2filter = dict()
 
-    for node in graph.nodes:
+    for v in graph.vertices():
+        node = graph.vp.node[v]
+
         obj_name = node.obj['name']
         if obj_name.startswith('['):
             skipped_objs.add(obj_name)
@@ -400,37 +457,36 @@ def find_exec_units(graph):
             skipped_objs.add(obj_basename)
             continue  # we don't care about ld
 
-        if not obj_name in obj2nodes:
-            obj2nodes[obj_name] = set()
+        if not obj_name in obj2filter:
+            obj2filter[obj_name] = graph.new_vertex_property("bool", val=0)
 
-        obj2nodes[obj_name].add(node)
+        obj2filter[obj_name][v] = 1
 
     if len(skipped_objs) > 0:
         log.warning("Skipped objects for EUP: %s" % ', '.join(skipped_objs))
 
-    subgraphs = dict()
-    for obj in obj2nodes:
-        subgraphs[obj] = nx.subgraph(graph, obj2nodes[obj])
-
     # Step 2: find all possible units of work
     units = list()
 
-    for obj in subgraphs:
+    for obj in obj2filter:
         # Step 2a: find all simple cycles
         log.info("Finding cycles for: %s" % os.path.basename(obj))
-        sub = subgraphs[obj]
-        simples = nx.simple_cycles(sub)
+        filter = obj2filter[obj]
+        graph.set_vertex_filter(filter)
+        simples = all_circuits(graph, unique=True)
 
         # Step 2b: merge together simple cycles that share any nodes in common
-        simple_nodes = set()
+        simple_vs = graph.new_vertex_property("bool", val=0)
         for cycle in simples:
-            for node in cycle:
-                simple_nodes.add(node)
+            simple_vs.a[cycle] = 1
 
-        merged_cycs = list(nx.connected_components(nx.to_undirected(
-                           nx.subgraph(sub, simple_nodes))))
+        graph.set_vertex_filter(simple_vs)
+        merged_cycs, cyc_hist = label_components(graph)
+        # immediately convert merged_cycs, otherwise it'll change based on the graph filters
+        merged_cycs = merged_cycs.ma.filled()
+        graph.set_vertex_filter(filter)
 
-        log.info("Found %d cycles in %s" % (len(merged_cycs), os.path.basename(obj)))
+        log.info("Found %d cycles in %s" % (len(cyc_hist), os.path.basename(obj)))
 
         # Step 2c: identify which nodes are entries and exits
         #
@@ -438,21 +494,25 @@ def find_exec_units(graph):
         # execution unit that could start/end an instance. E.g., an exit node can be a branching
         # basic block where one edge leads to another iteration of a loop (continuing the
         # instance) and the other leads to a block outside the unit, thereby ending it.
-        for cycle in merged_cycs:
+        for label in range(len(cyc_hist)):
             entries = set()
             exits = set()
 
-            for node in cycle:
+            cycle = np.where(merged_cycs == label)[0]
+
+            for idx in cycle:
+                node = graph.vp.node[graph.vertex(idx)]
+
                 if not node.plt_sym is None:
                     # PLT stubs cannot be entries or exits
                     continue
 
-                for pred in sub.predecessors(node):
-                    if not pred in cycle:
+                for pred in predecessors(graph, node):
+                    if not graph.gp.node2idx[pred] in cycle:
                         entries.add(node)
                         break
-                for succ in sub.successors(node):
-                    if not succ in cycle:
+                for succ in successors(graph, node):
+                    if not graph.gp.node2idx[succ] in cycle:
                         exits.add(node)
                         break
 
@@ -460,11 +520,13 @@ def find_exec_units(graph):
                 log.debug("Found cycle in %s with %d nodes, %d entries, %d exits" % (
                           os.path.basename(obj), len(cycle), len(entries), len(exits)))
                 units.append({'object': obj, 'entries': entries, 'exits': exits,
-                              'nodes': cycle})
+                              'nodes': set([graph.vp.node[graph.vertex(v)] for v in cycle])})
             elif len(entries) < 1:
                 log.warning("Skipped possible unit with no entries")
             elif len(exits) < 1:
                 log.warning("Skipped possible unit with no exits")
+
+    graph.clear_filters()
 
     log.info("Total units found: %d" % len(units))
     return units
@@ -479,15 +541,14 @@ def find_release_sites(graph, units):
     Returns the number of safe callers found.
     """
     # At enforcement time, function context sensitivity will not be available,
-    # so the release sites have to be safe in any context. To help with this
-    # check, we build a dictionary to map every address to all its nodes.
-    rva2node = index_graph_rvas(graph)
+    # so the release sites have to be safe in any context.
 
     # functions in the instrumented library that can release the quarantine list
     rel_funcs = ['free']
     # find all PLT stubs that call the instrumented functions
     plts_global = set()
-    for node in graph.nodes:
+    for v in graph.vertices():
+        node = graph.vp.node[v]
         if node.plt_sym in rel_funcs:
             plts_global.add(node)
 
@@ -498,7 +559,7 @@ def find_release_sites(graph, units):
         if not unit_obj in obj2ublocks:
             obj2ublocks[unit_obj] = set()
         for unit_node in unit['nodes']:
-            obj2ublocks[unit_obj] |= rva_lookup_node(rva2node, unit_node)
+            obj2ublocks[unit_obj] |= rva_lookup_node(graph, unit_node)
 
     num_units = len(units)
     units_with_releases = 0
@@ -516,7 +577,7 @@ def find_release_sites(graph, units):
         # unit under any context, this is a safe context to release the quarantine list
         unit['safe_callers'] = set()
         for plt in unit_plts:
-            for pred in graph.predecessors(plt):
+            for pred in predecessors(graph, plt):
                 if not pred in obj_unit_blocks:
                     unit['safe_callers'].add(pred)
 
@@ -563,7 +624,9 @@ def resolve_output_filepath(options, name):
 
     # ensure directories exist for output filepath
     log.debug("Creating %s" % os.path.dirname(output_fp))
-    os.makedirs(os.path.dirname(output_fp), exist_ok=True)
+    output_dp = os.path.dirname(output_fp)
+    if len(output_dp) > 0:
+        os.makedirs(output_dp, exist_ok=True)
 
     return output_fp
 
@@ -588,8 +651,6 @@ def main():
     parser = OptionParser(usage='Usage: %prog [options] 1.ptxed ...')
     parser.add_option('-n', '--no-fakeret', action='store_true', default=False,
             help='Insert fake returns for calls to imported functions.')
-    parser.add_option('-d', '--dot', action='store_true', default=False,
-            help='Save CFG graph as dot file')
     parser.add_option('-l', '--logging', action='store', type='int', default=20,
             help='Log level [10-50] (default: 20 - Info)')
     parser.add_option('-o', '--output', action='store', type='str', default=None,
@@ -609,7 +670,7 @@ def main():
     handler.setFormatter(logging.Formatter('%(levelname)7s | %(asctime)-15s | %(message)s'))
     log.addHandler(handler)
 
-    graph = nx.DiGraph()
+    graph = Graph(directed=True)
     for filepath in args:
         map_fp = os.path.join(os.path.dirname(filepath), 'maps')
         if not os.path.isfile(map_fp):
@@ -647,15 +708,8 @@ def main():
         log.info("Inserting fake returns")
         insert_plt_fakeret(graph)
 
-    if options.dot:
-        ofd, ofilepath = tempfile.mkstemp('.dot')
-        os.close(ofd)
-
-        log.info("Saving graph to: %s" % ofilepath)
-        write_dot(graph, ofilepath)
-
-    log.info("Number of nodes: %d" % graph.number_of_nodes())
-    log.info("Number of edges: %d" % graph.number_of_edges())
+    log.info("Number of nodes: %d" % graph.num_vertices())
+    log.info("Number of edges: %d" % graph.num_edges())
 
     log.info("Starting execution unit partitioning")
     units = find_exec_units(graph)
