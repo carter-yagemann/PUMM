@@ -74,7 +74,8 @@ BORING_MNEMONICS = {
     'vpcmpgtb', 'vpcmpistri', 'vpminub', 'vpmovmskb', 'vpor', 'vpslldq', 'vpsubb', 'vpxor',
     'vzeroupper', 'xchg', 'xchgl', 'xgetbv', 'xor', 'xorl', 'xorps', 'xorq', 'xrstor',
     'xsavec', 'andl', 'data', 'andq', 'andb', 'leaveq', 'rep stosqq', 'lock cmpxchgl',
-    'lock decl', 'setbb'
+    'lock decl', 'setbb', 'rep stosbb', 'setnl', 'cdq', 'cwd', 'movsbb', 'rep movsbb',
+    'xchgq', 'xaddl', 'xaddq', 'cmpxchgq'
 }
 
 # change of flow
@@ -202,6 +203,7 @@ def parse_ptxed(input, procmap, graph=None):
     if graph is None:
         graph = nx.DiGraph()
 
+    warned_mnemonics = set()
     curr_bb_start_addr = None
     entering_syscall = False
     prev_node = None
@@ -274,7 +276,9 @@ def parse_ptxed(input, procmap, graph=None):
                 entering_syscall = False
 
             else:
-                log.warning("Unhandled mnemonic, treating as boring: %s" % mnemonic)
+                if not mnemonic in warned_mnemonics:
+                    log.warning("Unhandled mnemonic, treating as boring: %s" % mnemonic)
+                    warned_mnemonics.add(mnemonic)
                 entering_syscall = False
 
     input.close()
