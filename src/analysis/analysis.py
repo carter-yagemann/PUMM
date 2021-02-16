@@ -424,7 +424,43 @@ def insert_plt_fakeret(graph):
             else:
                 log.warning("Cannot find return after %s (return to RVA %#x)" % (pred, ret_rva))
 
-def find_exec_units(graph):
+def should_skip_obj(name, filter_keywords):
+    """Decides whether an object should be skipped based on the name
+    and provided filters.
+
+    Returns True if object should be skipped, otherwise False.
+    """
+    if name.startswith('['):
+        # always skip pseudo-files
+        return True
+
+    if filter_keywords is None:
+        # no keywords provided, apply a default filter
+        obj_basename = os.path.basename(name)
+        if obj_basename.startswith('libc-'):
+            # skip libc
+            return True
+        if obj_basename.startswith('ld-'):
+            # skip runtime loader
+            return True
+
+        # passed all filters, parse it
+        return False
+
+    else:
+        # keywords were provided, see if any match
+        for keyword in filter_keywords:
+            if keyword in name:
+                # keyword match, parse it
+                return False
+
+        # no keyword matches, skip it
+        return True
+
+    # should be unreachable
+    assert False
+
+def find_exec_units(graph, filter_keywords=None):
     """Find execution units in the graph.
 
     An execution unit (EU) is defined as an autonomous unit of work, consisting of a group of
@@ -443,23 +479,30 @@ def find_exec_units(graph):
     """
     # Step 1: make per-object subgraphs
     skipped_objs = set()
+    parsed_objs = set()
     obj2filter = dict()
 
     for v in graph.vertices():
         node = graph.vp.node[v]
-
         obj_name = node.obj['name']
-        if obj_name.startswith('['):
-            skipped_objs.add(obj_name)
-            continue  # pseudo-file
 
-        obj_basename = os.path.basename(obj_name)
-        if obj_basename.startswith('libc-'):
-            skipped_objs.add(obj_basename)
-            continue  # we don't care about libc
-        if obj_basename.startswith('ld-'):
-            skipped_objs.add(obj_basename)
-            continue  # we don't care about ld
+        if obj_name in skipped_objs:
+            # already determined object should be skipped,
+            # no need to check again
+            continue
+        elif obj_name in parsed_objs:
+            # already determined object should be parsed,
+            # no need to check again
+            pass
+        elif should_skip_obj(obj_name, filter_keywords):
+            # object should be skipped,
+            # mark so we don't have to recheck again
+            skipped_objs.add(obj_name)
+            continue
+        else:
+            # object should be parsed,
+            # mark so we don't have to recheck again
+            parsed_objs.add(obj_name)
 
         if not obj_name in obj2filter:
             obj2filter[obj_name] = graph.new_vertex_property("bool", val=0)
@@ -661,8 +704,14 @@ def main():
             help='Override output filepath for storing generated profile')
     parser.add_option('-f', '--force', action='store_true', default=False,
             help='Overwrite output filepath if it already exists')
+    parser.add_option('-p', '--partition', action='store', type='str', default=None,
+            help='A comma seperated list of substrings denoting which objects '
+                 'should be partitioned')
 
     options, args = parser.parse_args()
+
+    if isinstance(options.partition, str):
+        options.partition = options.partition.split(',')
 
     if len(args) < 1:
         parser.print_help()
@@ -716,7 +765,7 @@ def main():
     log.info("Number of edges: %d" % graph.num_edges())
 
     log.info("Starting execution unit partitioning")
-    units = find_exec_units(graph)
+    units = find_exec_units(graph, options.partition)
     if len(units) < 1:
         log.error("No execution units found, nothing to partition")
         return
