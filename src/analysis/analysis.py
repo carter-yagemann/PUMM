@@ -687,12 +687,13 @@ def write_profile(profile_fp, units):
         if not 'safe_callers' in unit:
             log.warning("Unit is missing safe callers set")
             continue
-        safe_callers |= unit['safe_callers']
+        for caller in unit['safe_callers']:
+            # record caller's return address, this is what'll appear on stack
+            safe_callers.add("%s:%0x\n" % (caller.obj['name'], caller.rva + caller.size))
 
     with open(profile_fp, 'w') as ofile:
         for caller in safe_callers:
-            # record caller's return address, this is what'll appear on stack
-            ofile.write("%s:%0x\n" % (caller.obj['name'], caller.rva + caller.size))
+            ofile.write(caller)
 
 def main():
     parser = OptionParser(usage='Usage: %prog [options] 1.ptxed ...')
