@@ -25,7 +25,13 @@
 #include <string.h>
 #include <sys/queue.h>
 
+#ifdef SCAN
+#include <stdint.h>
+#include <unistd.h>
+#endif
+
 #include "base64.h"
+
 
 #ifdef DEBUG
     #define DEBUG_PRINT(...) fprintf(stderr, __VA_ARGS__)
@@ -35,6 +41,12 @@
 
 #define CONFIG_DIR "/.config/uaf-defense/"
 #define MAX_POLICY_SIZE 1024
+
+
+#ifdef SCAN
+void scan_dangling(void *quick);
+#endif
+
 
 /* Hooks */
 typedef void (*free_t)(void *ptr);
@@ -48,6 +60,9 @@ STAILQ_HEAD(free_head, pending_free) pending_frees =
 
 struct pending_free {
     void *ptr;
+#ifdef SCAN
+    int refs;
+#endif
     STAILQ_ENTRY(pending_free) entries;
 };
 
@@ -66,6 +81,9 @@ void queue_free(void *ptr) {
     }
 
     pending->ptr = ptr;
+#ifdef SCAN
+    pending->refs = 0;
+#endif
 
     DEBUG_PRINT("Queueing: %p\n", ptr);
     STAILQ_INSERT_TAIL(&pending_frees, pending, entries);
@@ -330,6 +348,9 @@ void free(void *ptr) {
         setup();
 
     if (should_flush(caller)) {
+#ifdef SCAN
+        scan_dangling(ptr);
+#endif
         flush_frees();
         DEBUG_PRINT("Freeing (quick): %p\n", ptr);
         real_free(ptr);
@@ -337,3 +358,73 @@ void free(void *ptr) {
         queue_free(ptr);
     }
 }
+
+
+#ifdef SCAN
+/*
+ * Called prior to flushing the quarantine list. Scans heap looking for any
+ * possible pointers to the chunks that are about to be freed and records
+ * the number of occurrences for each to stderr.
+ *
+ * quick is an optional additional pointer to check for in memory. This is
+ * for optimized callers that flush the list without adding the pointer currently
+ * being freed to it.
+ */
+void scan_dangling(void *quick) {
+    void *heap_base = NULL;
+    void *limit = NULL;
+    void *ptr;
+    uintptr_t val;
+    struct maps_obj *obj;
+    struct pending_free *pending;
+    int quick_refs = 0;
+
+    // check if a profile is loaded
+    if (!safe_callers[0])
+        return;
+
+    // get base of heap
+    STAILQ_FOREACH(obj, &maps, entries) {
+        if (!strcmp(obj->name, "[heap]")) {
+            heap_base = obj->start_va;
+            break;
+        }
+    }
+
+    if (!heap_base) {
+        fprintf(stderr, "Failed to get heap base\n");
+        return;
+    }
+
+    // get limit
+    limit = sbrk(0);
+
+    if (limit < heap_base) {
+        fprintf(stderr, "Failed to find limit\n");
+        return;
+    }
+
+    // perform scan
+    for (ptr = heap_base; ptr < limit; ptr += sizeof(uintptr_t)) {
+        val = *((uintptr_t *) ptr);
+
+        // we don't need to check the pending frees for any values that
+        // clearly aren't pointing to the heap
+        if ((void *) val < heap_base || (void *) val >= limit)
+            continue;
+
+        STAILQ_FOREACH(pending, &pending_frees, entries) {
+            if ((void *) val == pending->ptr)
+                pending->refs++;
+            if (quick && (void *) val == quick)
+                quick_refs++;
+        }
+    }
+
+    // print stats
+    fprintf(stderr, "Scan: Results\nScan: %p %d\n", quick, quick_refs);
+    STAILQ_FOREACH(pending, &pending_frees, entries) {
+        fprintf(stderr, "Scan: %p %d\n", pending->ptr, pending->refs);
+    }
+}
+#endif

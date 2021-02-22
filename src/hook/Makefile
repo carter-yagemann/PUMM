@@ -5,9 +5,8 @@ C_DEBUG_FLAGS = -g -DDEBUG
 
 all:
 	$(CC) $(C_BASE_FLAGS) $(C_PROD_FLAGS) hook.c -o hook.so
-
-debug:
-	$(CC) $(C_BASE_FLAGS) $(C_DEBUG_FLAGS) hook.c -o hook.so
+	$(CC) $(C_BASE_FLAGS) $(C_DEBUG_FLAGS) hook.c -o hook-debug.so
+	$(CC) $(C_BASE_FLAGS) $(C_PROD_FLAGS) -DSCAN hook.c -o hook-scan.so
 
 clean:
-	rm -f hook.so
+	rm -f *.so
