@@ -23,6 +23,7 @@ import os
 import re
 import sys
 import tempfile
+from traceback import format_exc
 import warnings
 
 # we don't draw so we don't import matplotlib, supress warning
@@ -746,7 +747,10 @@ def main():
                     break
 
         log.info("Parsing: %s" % filepath)
-        graph = parse_ptxed(filepath, procmap, graph)
+        try:
+            graph = parse_ptxed(filepath, procmap, graph)
+        except:
+            log.error("Failed to parse trace: %s" % format_exc())
 
     # Sadly, this is the earliest point where we can resolve the output filepath for
     # the profile we're going to generate because we want to name it based on the

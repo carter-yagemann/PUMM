@@ -15,6 +15,7 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+import os
 import re
 from zlib import adler32
 
@@ -44,11 +45,13 @@ def read_maps(maps_fp):
     A list, one item per mapped object, with the above mentioned keys.
     """
     objs = list()
-    # Reuse CLE to do most of the heavy lifting regarding the PLT, symbols, etc.
-    # CLE is going to load objects into base addresses of its choosing, so any
-    # addresses we borrow need to be converted into RVAs.
-    ld = None
+    # params to init a CLE loader
+    main_obj = None
+    main_opts = None
+    libs = list()
+    lib_opts = dict()
 
+    # Pass 1: Fill in basic info without parsing object contents
     with open(maps_fp, 'r') as ifile:
         for line in ifile:
             line = line.rstrip()  # remove newline character
@@ -60,27 +63,39 @@ def read_maps(maps_fp):
             # something in brackets like [vdso]
             base_va, size, file_offset, name = match.groups()
 
-            if ld is None:
-                # first object loaded should be the main object
-                ld = cle.Loader(name)
-
-            # may return None if object not found
-            ld_obj = ld.find_object(name)
-            reverse_plt = dict()
-            if not ld_obj is None:
-                for ld_vaddr in ld_obj.reverse_plt:
-                    sym_name = ld_obj.reverse_plt[ld_vaddr]
-                    plt_stub_rva = ld_vaddr - ld_obj.mapped_base
-                    reverse_plt[plt_stub_rva] = sym_name
+            if main_obj is None:
+                # first object in maps is main object
+                main_obj = name
+                main_opts = {'base_addr': int(base_va, 16)}
+            elif os.path.exists(name):
+                libs.append(name)
+                lib_opts[name] = {'base_addr': int(base_va, 16)}
 
             objs.append({'base_va': int(base_va, 16),
                          'size': int(size, 16),
                          'name': name,
                          'base_fo': int(file_offset, 16),
-                         'reverse_plt': reverse_plt,
-                         'cle': ld,
                          'obj_id': adler32(name.encode('utf8')),
                         })
+
+    # Use CLE to do most of the heavy lifting regarding the PLT, symbols, etc.
+    ld = cle.Loader(main_obj, main_opts=main_opts,
+            force_load_libs=libs, lib_opts=lib_opts)
+
+    # Pass 2: Fill in additional data based on CLE
+    for obj in objs:
+        name = obj['name']
+        # may return None if object not found
+        ld_obj = ld.find_object(name)
+        reverse_plt = dict()
+        if not ld_obj is None:
+            for ld_vaddr in ld_obj.reverse_plt:
+                sym_name = ld_obj.reverse_plt[ld_vaddr]
+                plt_stub_rva = ld_vaddr - ld_obj.mapped_base
+                reverse_plt[plt_stub_rva] = sym_name
+
+        obj['reverse_plt'] = reverse_plt
+        obj['cle'] = ld
 
     return objs
 
