@@ -422,7 +422,7 @@ void scan_dangling(void *quick) {
     }
 
     // print stats
-    fprintf(stderr, "Scan: Results\nScan: %p %d\n", quick, quick_refs);
+    fprintf(stderr, "Scan: %p %d\n", quick, quick_refs);
     STAILQ_FOREACH(pending, &pending_frees, entries) {
         fprintf(stderr, "Scan: %p %d\n", pending->ptr, pending->refs);
     }
