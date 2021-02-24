@@ -19,6 +19,7 @@
 
 #include <ctype.h>
 #include <dlfcn.h>
+#include <errno.h>
 #include <limits.h>
 #include <stdlib.h>
 #include <stdio.h>
@@ -360,6 +361,42 @@ void free(void *ptr) {
     } else {
         queue_free(ptr);
     }
+}
+
+void *realloc(void *ptr, size_t size) {
+    void *chunk;
+
+    if (!ptr)
+        return malloc(size);
+
+    if (size == 0) {
+        free(ptr);
+        return NULL;
+    }
+
+    // we have to create a new chunk so the old one can be quarantined
+    chunk = malloc(size);
+    if (!chunk)
+        return NULL; // failure
+
+    memcpy(chunk, ptr, size);
+
+    // this will quarantine the old chunk, if necessary
+    free(ptr);
+
+    return chunk;
+}
+
+void *reallocarray(void *ptr, size_t nmemb, size_t size) {
+    size_t total = nmemb * size;
+
+    if (nmemb != 0 && total / nmemb != size) {
+        // overflow
+        errno = ENOMEM;
+        return NULL;
+    }
+
+    return realloc(ptr, total);
 }
 
 
