@@ -274,6 +274,9 @@ void load_profile() {
     }
 
     while (getline(&line, &size, profile_fp) != -1) {
+        if (line[0] == '#')
+            continue; // comment
+
         ptr = strrchr(line, ':');
         if (!ptr) {
             fprintf(stderr, "Failed to parse profile line: %s", line);
