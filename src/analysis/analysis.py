@@ -21,6 +21,7 @@ import logging
 from optparse import OptionParser
 import os
 import re
+import signal
 import sys
 import tempfile
 from traceback import format_exc
@@ -88,6 +89,29 @@ BORING_MNEMONICS = {
 COF_MNEMONICS = BRANCH_MNEMONICS | CALL_MNEMONICS | SYSCALL_MNEMONICS | RET_MNEMONICS
 
 CUSTOM_MEM_LIBS = ['libjemalloc.so']
+
+# simple timeout handler
+class AnalysisTimeout(Exception):
+    pass
+
+def timeout_handler(signum, frame):
+    raise AnalysisTimeout("Timeout reached")
+
+def start_timeout(timeout_str):
+    timeout_str = timeout_str.lower()
+    if timeout_str.endswith('s'):
+        timeout = int(timeout_str[:-1])
+    elif timeout_str.endswith('m'):
+        timeout = int(timeout_str[:-1]) * 60
+    elif timeout_str.endswith('h'):
+        timeout = int(timeout_str[:-1]) * 60 * 60
+    else:
+        timeout = int(timeout_str)
+
+    if timeout > 0:
+        signal.signal(signal.SIGALRM, timeout_handler)
+        signal.alarm(timeout)
+
 
 class CFGNode(object):
 
@@ -461,7 +485,7 @@ def should_skip_obj(name, filter_keywords):
     # should be unreachable
     assert False
 
-def find_exec_units(graph, filter_keywords=None):
+def find_exec_units(graph, filter_keywords=None, timeout_str='0s'):
     """Find execution units in the graph.
 
     An execution unit (EU) is defined as an autonomous unit of work, consisting of a group of
@@ -525,8 +549,15 @@ def find_exec_units(graph, filter_keywords=None):
 
         # Step 2b: merge together simple cycles that share any nodes in common
         simple_vs = graph.new_vertex_property("bool", val=0)
-        for cycle in simples:
-            simple_vs.a[cycle] = 1
+
+        start_timeout(timeout_str)
+        try:
+            for cycle in simples:
+                simple_vs.a[cycle] = 1
+            # cancel alarm, if one was set
+            signal.alarm(0)
+        except AnalysisTimeout:
+            log.warning("Reached timeout, ending cycle search early")
 
         graph.set_vertex_filter(simple_vs)
         merged_cycs, cyc_hist = label_components(graph)
@@ -709,6 +740,9 @@ def main():
     parser.add_option('-p', '--partition', action='store', type='str', default=None,
             help='A comma seperated list of substrings denoting which objects '
                  'should be partitioned')
+    parser.add_option('-t', '--timeout', action='store', type='str', default='0',
+            help='Set timeout for cycle detection, supports suffixes s, m, and h, '
+                 'timeout is per-object (default: no timeout)')
 
     options, args = parser.parse_args()
 
@@ -770,7 +804,7 @@ def main():
     log.info("Number of edges: %d" % graph.num_edges())
 
     log.info("Starting execution unit partitioning")
-    units = find_exec_units(graph, options.partition)
+    units = find_exec_units(graph, options.partition, options.timeout)
     if len(units) < 1:
         log.error("No execution units found, nothing to partition")
         return
