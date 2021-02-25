@@ -63,7 +63,7 @@ def read_maps(maps_fp):
             # something in brackets like [vdso]
             base_va, size, file_offset, name = match.groups()
 
-            if main_obj is None:
+            if main_obj is None and os.path.exists(name):
                 # first object in maps is main object
                 main_obj = name
                 main_opts = {'base_addr': int(base_va, 16)}
