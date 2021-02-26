@@ -43,7 +43,7 @@ PTXED_INSTR = re.compile('([0-9a-f]+) ((?:[0-9-a-f]{2} )+) +([a-z ]+)')
 
 BRANCH_MNEMONICS = {
     'jb', 'jbe', 'jl', 'jle', 'jmp', 'jmpq', 'jnb', 'jnbe', 'jnl', 'jnle', 'jns',
-    'jnz', 'jo', 'jp', 'js', 'jz', 'bnd jmp'
+    'jnz', 'jo', 'jp', 'js', 'jz', 'bnd jmp', 'loop'
 }
 
 CALL_MNEMONICS = {
@@ -82,7 +82,11 @@ BORING_MNEMONICS = {
     'vzeroupper', 'xchg', 'xchgl', 'xgetbv', 'xor', 'xorl', 'xorps', 'xorq', 'xrstor',
     'xsavec', 'andl', 'data', 'andq', 'andb', 'leaveq', 'rep stosqq', 'lock cmpxchgl',
     'lock decl', 'setbb', 'rep stosbb', 'setnl', 'cdq', 'cwd', 'movsbb', 'rep movsbb',
-    'xchgq', 'xaddl', 'xaddq', 'cmpxchgq'
+    'xchgq', 'xaddl', 'xaddq', 'cmpxchgq', 'adcq', 'addb', 'addsdq', 'cld', 'cmovnl',
+    'cmovnlel', 'cmovnll', 'cvtsi', 'dec', 'movdl', 'movhpsq', 'movqq', 'mulq',
+    'popfqq', 'punpcklqdq', 'pushfqq', 'pxorx', 'rep cmpsbb', 'rep movsdl', 'rep movsqq',
+    'sbbq', 'setl', 'shll', 'testw', 'vptest', 'xorb', 'bsrq', 'shld', 'fnstcww', 'cvttsd',
+    'subsd', 'cmovlel', 'subw'
 }
 
 # change of flow
@@ -623,7 +627,7 @@ def find_release_sites(graph, units):
     # so the release sites have to be safe in any context.
 
     # functions in the instrumented library that can release the quarantine list
-    rel_funcs = ['free']
+    rel_funcs = ['free', 'realloc', 'reallocarray']
     # find all PLT stubs that call the instrumented functions
     plts_global = set()
     for v in graph.vertices():
@@ -772,7 +776,7 @@ def main():
         for bin_obj in procmap:
             try:
                 libbase = os.path.basename(bin_obj['name'])
-            except:
+            except TypeError:
                 continue
 
             for mem_name in CUSTOM_MEM_LIBS:
@@ -783,6 +787,8 @@ def main():
         log.info("Parsing: %s" % filepath)
         try:
             graph = parse_ptxed(filepath, procmap, graph)
+        except KeyboardInterrupt as ex:
+            raise ex
         except:
             log.error("Failed to parse trace: %s" % format_exc())
 

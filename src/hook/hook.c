@@ -343,9 +343,7 @@ void setup() {
     load_profile();
 }
 
-void free(void *ptr) {
-    void *caller = __builtin_extract_return_addr(__builtin_return_address(0));
-
+void do_free(void *ptr, void *caller) {
     DEBUG_PRINT("Requested Free: %p, Caller: %p\n", ptr, caller);
 
     if (!real_free)
@@ -363,14 +361,14 @@ void free(void *ptr) {
     }
 }
 
-void *realloc(void *ptr, size_t size) {
+void *do_realloc(void *ptr, size_t size, void *caller) {
     void *chunk;
 
     if (!ptr)
         return malloc(size);
 
     if (size == 0) {
-        free(ptr);
+        do_free(ptr, caller);
         return NULL;
     }
 
@@ -382,12 +380,23 @@ void *realloc(void *ptr, size_t size) {
     memcpy(chunk, ptr, size);
 
     // this will quarantine the old chunk, if necessary
-    free(ptr);
+    do_free(ptr, caller);
 
     return chunk;
 }
 
+void free(void *ptr) {
+    void *caller = __builtin_extract_return_addr(__builtin_return_address(0));
+    do_free(ptr, caller);
+}
+
+void *realloc(void *ptr, size_t size) {
+    void *caller = __builtin_extract_return_addr(__builtin_return_address(0));
+    return do_realloc(ptr, size, caller);
+}
+
 void *reallocarray(void *ptr, size_t nmemb, size_t size) {
+    void *caller = __builtin_extract_return_addr(__builtin_return_address(0));
     size_t total = nmemb * size;
 
     if (nmemb != 0 && total / nmemb != size) {
@@ -396,7 +405,7 @@ void *reallocarray(void *ptr, size_t nmemb, size_t size) {
         return NULL;
     }
 
-    return realloc(ptr, total);
+    return do_realloc(ptr, total, caller);
 }
 
 
