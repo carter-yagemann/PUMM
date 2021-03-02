@@ -21,6 +21,7 @@
 #include <dlfcn.h>
 #include <errno.h>
 #include <limits.h>
+#include <malloc.h>
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
@@ -363,6 +364,7 @@ void do_free(void *ptr, void *caller) {
 
 void *do_realloc(void *ptr, size_t size, void *caller) {
     void *chunk;
+    size_t orig_size;
 
     if (!ptr)
         return malloc(size);
@@ -377,7 +379,11 @@ void *do_realloc(void *ptr, size_t size, void *caller) {
     if (!chunk)
         return NULL; // failure
 
-    memcpy(chunk, ptr, size);
+    orig_size = malloc_usable_size(ptr);
+    if (orig_size <= size)
+        memcpy(chunk, ptr, orig_size);
+    else
+        memcpy(chunk, ptr, size);
 
     // this will quarantine the old chunk, if necessary
     do_free(ptr, caller);
