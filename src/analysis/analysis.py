@@ -43,7 +43,9 @@ PTXED_INSTR = re.compile('([0-9a-f]+) ((?:[0-9-a-f]{2} )+) +([a-z ]+)')
 
 BRANCH_MNEMONICS = {
     'jb', 'jbe', 'jl', 'jle', 'jmp', 'jmpq', 'jnb', 'jnbe', 'jnl', 'jnle', 'jns',
-    'jnz', 'jo', 'jp', 'js', 'jz', 'bnd jmp', 'loop'
+    'jnz', 'jo', 'jp', 'js', 'jz', 'bnd jmp', 'loop', 'jno', 'jnp', 'jnae', 'jc',
+    'jae', 'jnc', 'jna', 'ja', 'jnge', 'jge', 'jng', 'jg', 'jpe', 'jpo', 'jcxz',
+    'jecxz'
 }
 
 CALL_MNEMONICS = {
@@ -86,7 +88,15 @@ BORING_MNEMONICS = {
     'cmovnlel', 'cmovnll', 'cvtsi', 'dec', 'movdl', 'movhpsq', 'movqq', 'mulq',
     'popfqq', 'punpcklqdq', 'pushfqq', 'pxorx', 'rep cmpsbb', 'rep movsdl', 'rep movsqq',
     'sbbq', 'setl', 'shll', 'testw', 'vptest', 'xorb', 'bsrq', 'shld', 'fnstcww', 'cvttsd',
-    'subsd', 'cmovlel', 'subw'
+    'subsd', 'cmovlel', 'subw', 'addpd', 'addsd', 'andnpd', 'andpd', 'andpdx', 'andpsx',
+    'btr', 'cmovnzl', 'cmovnzq', 'cmpsd', 'divsd', 'fcomi', 'fdiv', 'fildl', 'fildq',
+    'fldl', 'fmull', 'fstp', 'fstpq', 'fxch', 'idivl', 'lock addl', 'lock addq',
+    'lock cmpxchgq', 'lock subl', 'lock xaddl', 'lock xaddq', 'movapdx', 'movupdx',
+    'mulsd', 'orpd', 'popcnt', 'psrad', 'punpckldq', 'punpckldqx', 'repne scasbb',
+    'sqrtsd', 'subpd', 'subpdx', 'subsdq', 'ucomisd', 'vaddsd', 'vaddsdq', 'vandnpd',
+    'vandpd', 'vandpdx', 'vcomisd', 'vcomisdq', 'vcvtsi', 'vfmadd', 'vfmsub', 'vfnmadd',
+    'vmovapd', 'vmovsdq', 'vmulsd', 'vmulsdq', 'vorpd', 'vstmxcsrl', 'vsubsd', 'vsubsdq',
+    'vucomisd', 'vxorpd', 'vxorpdx', 'xorpd'
 }
 
 # change of flow
