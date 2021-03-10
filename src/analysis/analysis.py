@@ -33,7 +33,6 @@ with warnings.catch_warnings():
     from graph_tool.all import Graph
     from graph_tool.topology import all_circuits, label_components
 import numpy as np
-import pyvex
 
 import maps
 
@@ -129,13 +128,14 @@ def start_timeout(timeout_str):
 
 class CFGNode(object):
 
-    def __init__(self, ava, procmap, size, context=None):
+    def __init__(self, ava, procmap, size, is_call, context=None):
         """Represents a basic block in an ASLR-agnostic manner.
 
         Keyword Arguments:
         ava -- Absolute virtual address of the start of the basic block.
         procmap -- Map from maps.read_maps().
         size -- Size of the basic block, in bytes.
+        is_call -- Whether this CFGNode ends with a call instruction.
         context -- An optional CFGNode to serve as the context for this one. Two
         nodes with the same RVA + object, but different context are treated as
         different.
@@ -157,8 +157,7 @@ class CFGNode(object):
             self.plt_sym = None
 
         self.context = context
-        self.irsb = node2vex(self, procmap)
-
+        self.is_call = is_call
         self.description = self._describe()
 
     def _describe(self):
@@ -215,12 +214,11 @@ def add_node(graph, node):
     graph.vp.node[v] = node
 
 def add_edge(graph, src_node, dst_node):
-    if not has_node(graph, src_node):
-        add_node(graph, src_node)
+    # perf: add_node checks has_node before adding
+    add_node(graph, src_node)
     src_v = graph.gp.node2idx[src_node]
 
-    if not has_node(graph, dst_node):
-        add_node(graph, dst_node)
+    add_node(graph, dst_node)
     dst_v = graph.gp.node2idx[dst_node]
 
     if not dst_v in graph.get_out_neighbors(src_v):
@@ -342,7 +340,8 @@ def parse_ptxed(input, procmap, graph=None):
                 # this will end the current basic block, next instruction
                 # will be the start of a new one
                 size = v_addr + instr_size - curr_bb_start_addr
-                curr_node = CFGNode(curr_bb_start_addr, procmap, size, context[-1])
+                is_call = mnemonic in CALL_MNEMONICS
+                curr_node = CFGNode(curr_bb_start_addr, procmap, size, is_call, context[-1])
                 add_node(graph, curr_node)
                 if not prev_node is None:
                     add_edge(graph, prev_node, curr_node)
@@ -382,25 +381,6 @@ def parse_ptxed(input, procmap, graph=None):
     input.close()
     return graph
 
-def node2vex(node, map):
-    """Given a node and a map from maps.read_maps(), return a VEX IRSB representation
-    of the node."""
-    assert isinstance(node, CFGNode)
-
-    # convert the node's RVA into an AVA within the CLE loader's memory space
-    ld = node.obj['cle']
-    name = node.obj['name']
-    ld_obj = ld.find_object(name)
-    if ld_obj is None:
-        raise ValueError("Cannot find object with name: %s" % name)
-
-    ava = ld_obj.mapped_base + node.rva
-
-    code = ld.memory.load(ava, node.size)
-    irsb = pyvex.lift(code, ava, ld_obj.arch)
-
-    return irsb
-
 def insert_plt_fakeret(graph):
     """Insert fake returns from PLT stubs and disconnect the real successors.
 
@@ -437,7 +417,7 @@ def insert_plt_fakeret(graph):
 
         # for each calling predecessor, insert a fake return to its return address
         for pred in preds:
-            if pred.irsb.jumpkind != 'Ijk_Call':
+            if not pred.is_call:
                 continue
 
             ret_rva = pred.rva + pred.size
