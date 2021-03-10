@@ -746,8 +746,21 @@ def write_profile(profile_fp, units, maps):
         for caller in safe_callers:
             ofile.write(caller)
 
+class NoMapsException(Exception):
+    pass
+
+def load_maps(trace_fp):
+    """Given the path to a trace file, load its maps.
+
+    Raises a NoMapsException exception if a maps file cannot be found.
+    """
+    map_fp = os.path.join(os.path.dirname(trace_fp), 'maps')
+    if not os.path.isfile(map_fp):
+        raise NoMapsException("No map file found for: %s" % map_fp)
+    return maps.read_maps(map_fp)
+
 def main():
-    parser = OptionParser(usage='Usage: %prog [options] 1.ptxed ...')
+    parser = OptionParser(usage='Usage: %prog [options] 1.ptxed[.gz] ...')
     parser.add_option('-n', '--no-fakeret', action='store_true', default=False,
             help='Insert fake returns for calls to imported functions.')
     parser.add_option('-l', '--logging', action='store', type='int', default=20,
@@ -778,13 +791,22 @@ def main():
     handler.setFormatter(logging.Formatter('%(levelname)7s | %(asctime)-15s | %(message)s'))
     log.addHandler(handler)
 
+    # init graph and procmap, specify which positional args are traces
     graph = Graph(directed=True)
-    for filepath in args:
-        map_fp = os.path.join(os.path.dirname(filepath), 'maps')
-        if not os.path.isfile(map_fp):
-            log.error("No map file found for: %s" % map_fp)
-            sys.exit(1)
-        procmap = maps.read_maps(map_fp)
+    procmap = load_maps(args[0])
+    traces = args
+
+    # validate profile output path is feasible
+    main_obj = procmap[0]['cle'].main_object
+    profile_fp = resolve_output_filepath(options,
+            base64.b64encode(main_obj.binary.encode('utf8')).decode('ascii'))
+    if profile_fp is None:
+        log.error("Cannot resolve filepath to store generated profile")
+        sys.exit(1)
+
+    # parse PT traces into graph
+    for filepath in traces:
+        procmap = load_maps(filepath)
 
         # warn if the traced program appears to be using a custom memory manager,
         # protection requires an instrumented implementation
@@ -806,16 +828,6 @@ def main():
             raise ex
         except:
             log.error("Failed to parse trace: %s" % format_exc())
-
-    # Sadly, this is the earliest point where we can resolve the output filepath for
-    # the profile we're going to generate because we want to name it based on the
-    # main object and we don't know its name until we've parsed a trace.
-    main_obj = procmap[0]['cle'].main_object
-    profile_fp = resolve_output_filepath(options,
-            base64.b64encode(main_obj.binary.encode('utf8')).decode('ascii'))
-    if profile_fp is None:
-        log.error("Cannot resolve filepath to store generated profile")
-        sys.exit(1)
 
     if not options.no_fakeret:
         log.info("Inserting fake returns")
