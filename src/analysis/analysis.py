@@ -536,7 +536,7 @@ def find_exec_units(graph, filter_keywords=None, timeout_str='0s'):
 
     for obj in obj2filter:
         # Step 2a: find all simple cycles
-        log.info("Finding cycles for: %s" % os.path.basename(obj))
+        log.debug("Finding cycles for: %s" % os.path.basename(obj))
         filter = obj2filter[obj]
         graph.set_vertex_filter(filter)
         simples = all_circuits(graph, unique=True)
@@ -595,9 +595,9 @@ def find_exec_units(graph, filter_keywords=None, timeout_str='0s'):
                 units.append({'object': obj, 'entries': entries, 'exits': exits,
                               'nodes': set([graph.vp.node[graph.vertex(v)] for v in cycle])})
             elif len(entries) < 1:
-                log.warning("Skipped possible unit with no entries")
+                log.debug("Skipped possible unit with no entries")
             elif len(exits) < 1:
-                log.warning("Skipped possible unit with no exits")
+                log.debug("Skipped possible unit with no exits")
 
     graph.clear_filters()
 
