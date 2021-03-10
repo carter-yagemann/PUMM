@@ -26,7 +26,7 @@ MAPS_PARSER = re.compile(MAPS_REGEX)
 
 def read_maps(maps_fp):
     """Given a filepath to a maps produced using procmap.sh (extracted
-    from perf.data, produce a dictionary representation.
+    from perf.data), produce a dictionary representation.
 
     Keys:
     base_va -- Base virtual address of virtual memory area (VMA).

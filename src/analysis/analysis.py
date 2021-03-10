@@ -723,7 +723,7 @@ def resolve_output_filepath(options, name):
 
     return output_fp
 
-def write_profile(profile_fp, units):
+def write_profile(profile_fp, units, maps):
     """Writes a profile to disk based on the data gathered on EUs.
 
     Assumes profile_fp has already been validated via resolve_output_filepath().
@@ -731,11 +731,16 @@ def write_profile(profile_fp, units):
     safe_callers = set()
     for unit in units:
         if not 'safe_callers' in unit:
-            log.warning("Unit is missing safe callers set")
             continue
         for caller in unit['safe_callers']:
             # record caller's return address, this is what'll appear on stack
             safe_callers.add("%s:%0x\n" % (caller.obj['name'], caller.rva + caller.size))
+
+    if len(safe_callers) < 1:
+        # no safe callers, create an OTA profile by adding a nonexistent caller
+        log.warning("Creating an OTA policy")
+        main_obj = maps[0]['cle'].main_object
+        safe_callers.add("%s:%0x\n" % (main_obj.binary, main_obj.max_addr - main_obj.min_addr))
 
     with open(profile_fp, 'w') as ofile:
         for caller in safe_callers:
@@ -821,18 +826,19 @@ def main():
 
     log.info("Starting execution unit partitioning")
     units = find_exec_units(graph, options.partition, options.timeout)
+
     if len(units) < 1:
         log.error("No execution units found, nothing to partition")
-        return
-
-    log.info("Searching for quarantine release sites")
-    num_rels = find_release_sites(graph, units)
+        num_rels = 0
+    else:
+        log.info("Searching for quarantine release sites")
+        num_rels = find_release_sites(graph, units)
 
     if num_rels < 1:
-        log.warning("No sites found, no profile will be generated")
-    else:
-        log.info("Writing profile to: %s" % profile_fp)
-        write_profile(profile_fp, units)
+        log.warning("No sites found, profile will be OTA")
+
+    log.info("Writing profile to: %s" % profile_fp)
+    write_profile(profile_fp, units, procmap)
 
 if __name__ == "__main__":
     main()
