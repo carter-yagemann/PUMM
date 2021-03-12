@@ -160,6 +160,8 @@ class CFGNode(object):
         self.is_call = is_call
         self.description = self._describe()
 
+        self.hash = self._calc_hash()
+
     def _describe(self):
         # start with object name, RVA, and size
         desc = "%s+%#x[%d]" % (os.path.basename(self.obj['name']), self.rva, self.size)
@@ -174,6 +176,12 @@ class CFGNode(object):
 
         return desc
 
+    def _calc_hash(self):
+        val = (self.obj['obj_id'] << 32) ^ self.rva
+        if not self.context is None:
+            val ^= (hash(self.context) << 64)
+        return val
+
     def __repr__(self):
         return "<CFGNode %s>" % self.description
 
@@ -181,10 +189,7 @@ class CFGNode(object):
         return "<CFGNode %s>" % self.description
 
     def __hash__(self):
-        val = (self.obj['obj_id'] << 32) ^ self.rva
-        if not self.context is None:
-            val ^= (hash(self.context) << 64)
-        return val
+        return self.hash
 
     def __eq__(self, other):
         return hash(self) == hash(other)
