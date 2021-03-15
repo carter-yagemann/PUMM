@@ -307,6 +307,7 @@ def parse_ptxed(input, procmap, graph=None):
 
     warned_mnemonics = set()
     curr_bb_start_addr = None
+    resume_addr = None
     entering_syscall = False
     prev_node = None
     context = [None]
@@ -316,12 +317,27 @@ def parse_ptxed(input, procmap, graph=None):
 
         if line == '[disabled]':
             log.debug('PTXed: [disabled]')
-            # tracing turned off, cannot assume next node
-            # is linked to prior unless we entered a syscall
-            if not entering_syscall:
+            # tracing turned off, how should we handle the next instruction?
+            if not entering_syscall and curr_bb_start_addr is None:
+                # turned off at the end of a basic block, next instruction is
+                # a new one, but we don't know if it's related to the prior, so
+                # we won't create an edge
                 prev_node = None
+            elif not entering_syscall:
+                # turned off in the middle of a basic block, note where it
+                # should resume if it returns to this context, and we'll
+                # check later whether it does
+                #
+                # note that if curr_bb_start_addr is not None, we have decoded
+                # at least 1 instruction, so v_addr and instr_size are defined
+                resume_addr = v_addr + instr_size
             else:
+                # entered a syscall, don't know which context we'll return to
+                #
+                # note that for entering_syscall to be True, an instruction
+                # must have been decoded so v_addr and instr_size are defined
                 entering_syscall = False
+                resume_addr = v_addr + instr_size
 
         else:
             instr = PTXED_INSTR.match(line)
@@ -335,6 +351,17 @@ def parse_ptxed(input, procmap, graph=None):
             v_addr = int(instr.group(1), 16)
             instr_size = len(instr.group(2)) // 3
             mnemonic = instr.group(3).rstrip()
+
+            if not resume_addr is None:
+                if v_addr != resume_addr:
+                    # tracing previously disabled and we resumed somewhere else,
+                    # treat this as the start of a new basic block and do not
+                    # link it with an edge
+                    log.warning("Tracing disabled and resumed somewhere else")
+                    curr_bb_start_addr = None
+                    prev_node = None
+
+                resume_addr = None
 
             if curr_bb_start_addr is None:
                 # previous instruction completed a basic block, this is now
@@ -373,15 +400,13 @@ def parse_ptxed(input, procmap, graph=None):
 
                 # branches and syscalls do not change context
 
-            elif mnemonic in BORING_MNEMONICS:
-                # nothing needs to be done
-                entering_syscall = False
-
             else:
-                if not mnemonic in warned_mnemonics:
+                if not mnemonic in BORING_MNEMONICS and not mnemonic in warned_mnemonics:
                     log.warning("Unhandled mnemonic, treating as boring: %s" % mnemonic)
                     warned_mnemonics.add(mnemonic)
                 entering_syscall = False
+                # extra paranoid check that next instruction follows the prior
+                resume_addr = v_addr + instr_size
 
     input.close()
     return graph
