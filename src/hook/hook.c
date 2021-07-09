@@ -26,10 +26,10 @@
 #include <stdio.h>
 #include <string.h>
 #include <sys/queue.h>
+#include <unistd.h>
 
 #ifdef SCAN
 #include <stdint.h>
-#include <unistd.h>
 #endif
 
 #include "base64.h"
@@ -48,7 +48,6 @@
 #ifdef SCAN
 void scan_dangling();
 #endif
-void setup();
 
 
 /* Hooks */
@@ -75,9 +74,6 @@ struct pending_free {
 void queue_free(void *ptr) {
     struct pending_free *pending;
 
-    if (!real_malloc || !real_free)
-        setup();
-
     pending = real_malloc(sizeof(struct pending_free));
 
     if (!pending) {
@@ -97,9 +93,6 @@ void queue_free(void *ptr) {
 
 void flush_frees() {
     struct pending_free *pending;
-
-    if (!real_malloc || !real_free)
-        setup();
 
     while (!STAILQ_EMPTY(&pending_frees)) {
         pending = STAILQ_FIRST(&pending_frees);
@@ -128,9 +121,6 @@ struct maps_obj {
 void add_maps_obj(char *name, void *offset, void *start_va, void *end_va) {
     char *name_dup = strdup(name);
     struct maps_obj *obj;
-
-    if (!real_malloc || !real_free)
-        setup();
 
     obj = real_malloc(sizeof(struct maps_obj));
 
@@ -189,9 +179,6 @@ int load_maps() {
     size_t size = 0;
     FILE *maps_fp;
     unsigned long start_va, end_va, offset;
-
-    if (!real_malloc || !real_free)
-        setup();
 
     maps_fp = fopen("/proc/self/maps", "r");
 
@@ -351,10 +338,20 @@ void setup() {
 }
 
 void *do_malloc(size_t size, void *caller) {
+    static int resolving = 0;
+
     DEBUG_PRINT("Requested alloc: %lu, Caller: %p\n", size, caller);
 
-    if (!real_malloc || !real_free)
-        setup();
+    if (!real_malloc) {
+        if (!resolving) {
+            resolving = 1;
+            setup();
+            resolving = 0;
+        } else {
+            // setup called back into malloc, must handle this ourselves
+            return sbrk(size);
+        }
+    }
 
     if (should_flush(caller)) {
 #ifdef SCAN
