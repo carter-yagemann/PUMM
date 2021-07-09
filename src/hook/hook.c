@@ -46,13 +46,17 @@
 
 
 #ifdef SCAN
-void scan_dangling(void *quick);
+void scan_dangling();
 #endif
+void setup();
 
 
 /* Hooks */
 typedef void (*free_t)(void *ptr);
-free_t real_free;
+free_t real_free = NULL;
+
+typedef void *(*malloc_t)(size_t size);
+malloc_t real_malloc = NULL;
 /* Hooks */
 
 
@@ -71,10 +75,10 @@ struct pending_free {
 void queue_free(void *ptr) {
     struct pending_free *pending;
 
-    if (!real_free)
-        real_free = dlsym(RTLD_NEXT, "free");
+    if (!real_malloc || !real_free)
+        setup();
 
-    pending = malloc(sizeof(struct pending_free));
+    pending = real_malloc(sizeof(struct pending_free));
 
     if (!pending) {
         fprintf(stderr, "Failed to malloc, cannot queue free\n");
@@ -94,8 +98,8 @@ void queue_free(void *ptr) {
 void flush_frees() {
     struct pending_free *pending;
 
-    if (!real_free)
-        real_free = dlsym(RTLD_NEXT, "free");
+    if (!real_malloc || !real_free)
+        setup();
 
     while (!STAILQ_EMPTY(&pending_frees)) {
         pending = STAILQ_FIRST(&pending_frees);
@@ -123,7 +127,12 @@ struct maps_obj {
 
 void add_maps_obj(char *name, void *offset, void *start_va, void *end_va) {
     char *name_dup = strdup(name);
-    struct maps_obj *obj = malloc(sizeof(struct maps_obj));
+    struct maps_obj *obj;
+
+    if (!real_malloc || !real_free)
+        setup();
+
+    obj = real_malloc(sizeof(struct maps_obj));
 
     if (!obj) {
         fprintf(stderr, "Failed to malloc maps_obj\n");
@@ -181,8 +190,8 @@ int load_maps() {
     FILE *maps_fp;
     unsigned long start_va, end_va, offset;
 
-    if (!real_free)
-        real_free = dlsym(RTLD_NEXT, "free");
+    if (!real_malloc || !real_free)
+        setup();
 
     maps_fp = fopen("/proc/self/maps", "r");
 
@@ -242,9 +251,6 @@ void load_profile() {
     size_t size = 0;
     int base64_len;
 
-    if (!real_free)
-        real_free = dlsym(RTLD_NEXT, "free");
-
     // resolve main object's name
     exe_path = realpath("/proc/self/exe", NULL);
     if (!exe_path) {
@@ -254,11 +260,8 @@ void load_profile() {
 
     // resolve and attempt to open profile
     profile_name = base64(exe_path, strlen(exe_path), &base64_len);
-
-    strncpy(profile_path, getenv("HOME"), PATH_MAX);
-    strncat(profile_path, CONFIG_DIR, PATH_MAX);
-    strncat(profile_path, profile_name, PATH_MAX);
-
+    snprintf(profile_path, PATH_MAX, "%s%s%s", getenv("HOME"),
+             CONFIG_DIR, profile_name);
     real_free(profile_name);
 
     profile_fp = fopen(profile_path, "r");
@@ -324,6 +327,8 @@ int should_flush(void *caller) {
         return 1;
 
     for (offset = 0; offset < MAX_POLICY_SIZE; offset++) {
+        if (!safe_callers[offset])
+            break;
         if (caller == safe_callers[offset])
             return 1;
     }
@@ -335,6 +340,7 @@ int should_flush(void *caller) {
 
 void setup() {
     // resolve hooks
+    real_malloc = dlsym(RTLD_NEXT, "malloc");
     real_free = dlsym(RTLD_NEXT, "free");
 
     // initialize lists
@@ -344,22 +350,26 @@ void setup() {
     load_profile();
 }
 
-void do_free(void *ptr, void *caller) {
-    DEBUG_PRINT("Requested Free: %p, Caller: %p\n", ptr, caller);
+void *do_malloc(size_t size, void *caller) {
+    DEBUG_PRINT("Requested alloc: %lu, Caller: %p\n", size, caller);
 
-    if (!real_free)
+    if (!real_malloc || !real_free)
         setup();
 
     if (should_flush(caller)) {
 #ifdef SCAN
-        scan_dangling(ptr);
+        scan_dangling();
 #endif
         flush_frees();
-        DEBUG_PRINT("Freeing (quick): %p\n", ptr);
-        real_free(ptr);
-    } else {
-        queue_free(ptr);
     }
+
+    return real_malloc(size);
+}
+
+void do_free(void *ptr, void *caller) {
+    DEBUG_PRINT("Requested free: %p, Caller: %p\n", ptr, caller);
+    if (ptr)
+        queue_free(ptr);
 }
 
 void *do_realloc(void *ptr, size_t size, void *caller) {
@@ -367,7 +377,7 @@ void *do_realloc(void *ptr, size_t size, void *caller) {
     size_t orig_size;
 
     if (!ptr)
-        return malloc(size);
+        return do_malloc(size, caller);
 
     if (size == 0) {
         do_free(ptr, caller);
@@ -375,7 +385,7 @@ void *do_realloc(void *ptr, size_t size, void *caller) {
     }
 
     // we have to create a new chunk so the old one can be quarantined
-    chunk = malloc(size);
+    chunk = do_malloc(size, caller);
     if (!chunk)
         return NULL; // failure
 
@@ -391,9 +401,23 @@ void *do_realloc(void *ptr, size_t size, void *caller) {
     return chunk;
 }
 
+void *malloc(size_t size) {
+    void *caller = __builtin_extract_return_addr(__builtin_return_address(0));
+    return do_malloc(size, caller);
+}
+
 void free(void *ptr) {
     void *caller = __builtin_extract_return_addr(__builtin_return_address(0));
     do_free(ptr, caller);
+}
+
+void *calloc(size_t nmemb, size_t size) {
+    void *caller = __builtin_extract_return_addr(__builtin_return_address(0));
+
+    if (nmemb == 0 || size == 0)
+        return NULL;
+
+    return do_malloc(nmemb * size, caller);
 }
 
 void *realloc(void *ptr, size_t size) {
@@ -420,19 +444,14 @@ void *reallocarray(void *ptr, size_t nmemb, size_t size) {
  * Called prior to flushing the quarantine list. Scans heap looking for any
  * possible pointers to the chunks that are about to be freed and records
  * the number of occurrences for each to stderr.
- *
- * quick is an optional additional pointer to check for in memory. This is
- * for optimized callers that flush the list without adding the pointer currently
- * being freed to it.
  */
-void scan_dangling(void *quick) {
+void scan_dangling() {
     void *heap_base = NULL;
     void *limit = NULL;
     void *ptr;
     uintptr_t val;
     struct maps_obj *obj;
     struct pending_free *pending;
-    int quick_refs = 0;
 
     // check if a profile is loaded
     if (!safe_callers[0])
@@ -471,13 +490,10 @@ void scan_dangling(void *quick) {
         STAILQ_FOREACH(pending, &pending_frees, entries) {
             if ((void *) val == pending->ptr)
                 pending->refs++;
-            if (quick && (void *) val == quick)
-                quick_refs++;
         }
     }
 
     // print stats
-    fprintf(stderr, "Scan: %p %d\n", quick, quick_refs);
     STAILQ_FOREACH(pending, &pending_frees, entries) {
         fprintf(stderr, "Scan: %p %d\n", pending->ptr, pending->refs);
     }

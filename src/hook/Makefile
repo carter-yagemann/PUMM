@@ -1,5 +1,5 @@
 CC = gcc
-C_BASE_FLAGS = -Wall -shared -fPIC -ldl -I.
+C_BASE_FLAGS = -Wall -shared -fPIC -I. -Wl,--no-as-needed -ldl
 C_PROD_FLAGS = -s -O3
 C_DEBUG_FLAGS = -g -DDEBUG
 

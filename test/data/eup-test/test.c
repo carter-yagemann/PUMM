@@ -21,7 +21,7 @@ void parse_line(char *line) {
 int main(int argc, char **argv) {
     FILE *ifile = NULL;
     char *line = NULL;
-    size_t size = 0;
+    size_t size = 1024;
 
     if (argc != 2) {
         printf("Usage: %s <file>\n", argv[0]);
@@ -32,8 +32,16 @@ int main(int argc, char **argv) {
     if (!ifile)
         return 1;
 
-    while (getline(&line, &size, ifile) != -1)
-        parse_line(line);
+    while (1) {
+        line = (char *) malloc(size);
+        if (getline(&line, &size, ifile) != -1) {
+            parse_line(line);
+            free(line);
+            line = NULL;
+        } else {
+            break;
+        }
+    }
 
     if (line)
         free(line);

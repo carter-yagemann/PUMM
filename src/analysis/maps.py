@@ -21,7 +21,8 @@ from zlib import adler32
 
 import cle
 
-MAPS_REGEX = '\[(0x[0-9a-f]+)\((0x[0-9a-f]+)\) @ (0[x0-9a-f]*) [0-9a-f]{2}:[0-9a-f]{2} [0-9]+ [0-9]+\]: [rwxp-]{4} (.*)'
+MAPS_REGEX = ('\[(0x[0-9a-f]+)\((0x[0-9a-f]+)\) @ (0[x0-9a-f]*) '
+             '[0-9a-f]{2}:[0-9a-f]{2} [0-9]+ [0-9]+\]: [rwxp-]{4} (.*)')
 MAPS_PARSER = re.compile(MAPS_REGEX)
 
 def read_maps(maps_fp):
@@ -31,11 +32,13 @@ def read_maps(maps_fp):
     Keys:
     base_va -- Base virtual address of virtual memory area (VMA).
     size -- Size of the VMA, in bytes.
-    name -- Either the filepath to a real object, or the name of a pseudo-file (ex: "[vdso]").
+    name -- Either the filepath to a real object, or the name of a pseudo-file
+    (ex: "[vdso]").
     base_fo -- Base offset within object from which the VMA was read.
     reverse_plt -- Mapping of PLT stub RVAs to symbol names.
-    cle -- A CLE loader instance. Note that it may have mapped objects differently than what
-    was recorded in perf, so virtual addresses have to be carefully translated.
+    cle -- A CLE loader instance. Note that it may have mapped objects
+    differently than what was recorded in perf, so virtual addresses have to be
+    carefully translated.
     obj_id -- An integer that uniquely identifies this object
 
     Exceptions:
@@ -59,8 +62,8 @@ def read_maps(maps_fp):
             if match is None:
                 raise ValueError("Cannot parse line: %s" % line)
 
-            # note: name can be a full filepath or in the case of a pseudo-file,
-            # something in brackets like [vdso]
+            # note: name can be a full filepath or in the case of a
+            # pseudo-file, something in brackets like [vdso]
             base_va, size, file_offset, name = match.groups()
 
             if main_obj is None and os.path.exists(name):

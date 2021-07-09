@@ -31,7 +31,7 @@ import warnings
 with warnings.catch_warnings():
     warnings.simplefilter("ignore")
     from graph_tool.all import Graph
-    from graph_tool.topology import all_circuits, label_components
+    from graph_tool.topology import shortest_path
 import numpy as np
 
 import maps
@@ -41,10 +41,10 @@ log = logging.getLogger(name=__name__)
 PTXED_INSTR = re.compile('([0-9a-f]+) ((?:[0-9-a-f]{2} )+) +([a-z ]+)')
 
 BRANCH_MNEMONICS = {
-    'jb', 'jbe', 'jl', 'jle', 'jmp', 'jmpq', 'jnb', 'jnbe', 'jnl', 'jnle', 'jns',
-    'jnz', 'jo', 'jp', 'js', 'jz', 'bnd jmp', 'loop', 'jno', 'jnp', 'jnae', 'jc',
-    'jae', 'jnc', 'jna', 'ja', 'jnge', 'jge', 'jng', 'jg', 'jpe', 'jpo', 'jcxz',
-    'jecxz'
+    'jb', 'jbe', 'jl', 'jle', 'jmp', 'jmpq', 'jnb', 'jnbe', 'jnl', 'jnle',
+    'jns', 'jnz', 'jo', 'jp', 'js', 'jz', 'bnd jmp', 'loop', 'jno', 'jnp',
+    'jnae', 'jc', 'jae', 'jnc', 'jna', 'ja', 'jnge', 'jge', 'jng', 'jg', 'jpe',
+    'jpo', 'jcxz', 'jecxz'
 }
 
 CALL_MNEMONICS = {
@@ -61,45 +61,51 @@ SYSCALL_MNEMONICS = {
 
 BORING_MNEMONICS = {
     'adc', 'add', 'addl', 'addq', 'addw', 'and', 'andb' 'andl' 'andq', 'andw',
-    'bsf', 'bsr', 'bswap', 'bt', 'btc', 'bts', 'cdqe', 'cmovb', 'cmovbe', 'cmovbel',
-    'cmovbeq', 'cmovbew', 'cmovl', 'cmovle', 'cmovnb', 'cmovnbe', 'cmovnbl', 'cmovnbq',
-    'cmovbew', 'cmovl', 'cmovle', 'cmovnb', 'cmovnbe', 'cmovnbl', 'cmovnbq', 'cmovnle',
-    'cmovns', 'cmovnz', 'cmovs', 'cmovz', 'cmovzl', 'cmovzq', 'cmp', 'cmpb', 'cmpl',
-    'cmpq', 'cmpw', 'cmpxchgl', 'comisd', 'comisdq', 'cpuid', 'cqo', 'cvttsd2si',
-    'data16', 'decl', 'div', 'divl', 'divq', 'idiv', 'imul', 'imull', 'imulq', 'leal',
-    'leaq', 'lock', 'mfence', 'mov', 'movapd', 'movapsx', 'movb', 'movbel', 'movd',
-    'movdqa', 'movdqax', 'movdqux', 'movhpdq', 'movl', 'movlpdq', 'movq', 'movsdq',
-    'movsqq', 'movsx', 'movsxb', 'movsxd', 'movsxdl', 'movsxw', 'movupsx', 'movw',
-    'movzx', 'movzxb', 'movzxw', 'mul', 'mulsdq', 'neg', 'nop', 'nopl', 'nopw', 'not',
-    'or', 'orb', 'orl', 'orq', 'orw', 'pcmpeqb', 'pcmpeqbx', 'pcmpeqd', 'pcmpistri',
-    'pcmpistrix', 'pminub', 'pminubx', 'pmovmskb', 'popq', 'por', 'pshufb', 'pshufd',
-    'pslldq', 'psrldq', 'psubb', 'punpcklbw', 'punpcklwd', 'pushq', 'pxor', 'rdtsc',
-    'rep', 'rol', 'ror', 'sar', 'sbb', 'setb', 'setbe', 'setle', 'setnb',
-    'setnbe', 'setnle', 'setnz', 'setnzb', 'seto', 'setz', 'setzb', 'shl', 'shr',
-    'sub', 'subb', 'subl', 'subq', 'test', 'testb', 'testl', 'testq', 'tzcnt', 'ucomisdq',
-    'vmovd', 'vmovdl', 'vmovdqax', 'vmovdqay', 'vmovdqux', 'vmovdquy', 'vmovq', 'vmovqq',
-    'vpalignrx', 'vpand', 'vpandn', 'vpbroadcastb', 'vpcmpeqb', 'vpcmpeqbx', 'vpcmpeqby',
-    'vpcmpgtb', 'vpcmpistri', 'vpminub', 'vpmovmskb', 'vpor', 'vpslldq', 'vpsubb', 'vpxor',
-    'vzeroupper', 'xchg', 'xchgl', 'xgetbv', 'xor', 'xorl', 'xorps', 'xorq', 'xrstor',
-    'xsavec', 'andl', 'data', 'andq', 'andb', 'leaveq', 'rep stosqq', 'lock cmpxchgl',
-    'lock decl', 'setbb', 'rep stosbb', 'setnl', 'cdq', 'cwd', 'movsbb', 'rep movsbb',
-    'xchgq', 'xaddl', 'xaddq', 'cmpxchgq', 'adcq', 'addb', 'addsdq', 'cld', 'cmovnl',
+    'bsf', 'bsr', 'bswap', 'bt', 'btc', 'bts', 'cdqe', 'cmovb', 'cmovbe',
+    'cmovbel', 'cmovbeq', 'cmovbew', 'cmovl', 'cmovle', 'cmovnb', 'cmovnbe',
+    'cmovnbl', 'cmovnbq', 'cmovbew', 'cmovl', 'cmovle', 'cmovnb', 'cmovnbe',
+    'cmovnbl', 'cmovnbq', 'cmovnle', 'cmovns', 'cmovnz', 'cmovs', 'cmovz',
+    'cmovzl', 'cmovzq', 'cmp', 'cmpb', 'cmpl', 'cmpq', 'cmpw', 'cmpxchgl',
+    'comisd', 'comisdq', 'cpuid', 'cqo', 'cvttsd2si', 'data16', 'decl', 'div',
+    'divl', 'divq', 'idiv', 'imul', 'imull', 'imulq', 'leal', 'leaq', 'lock',
+    'mfence', 'mov', 'movapd', 'movapsx', 'movb', 'movbel', 'movd', 'movdqa',
+    'movdqax', 'movdqux', 'movhpdq', 'movl', 'movlpdq', 'movq', 'movsdq',
+    'movsqq', 'movsx', 'movsxb', 'movsxd', 'movsxdl', 'movsxw', 'movupsx',
+    'movw', 'movzx', 'movzxb', 'movzxw', 'mul', 'mulsdq', 'neg', 'nop', 'nopl',
+    'nopw', 'not', 'or', 'orb', 'orl', 'orq', 'orw', 'pcmpeqb', 'pcmpeqbx',
+    'pcmpeqd', 'pcmpistri', 'pcmpistrix', 'pminub', 'pminubx', 'pmovmskb',
+    'popq', 'por', 'pshufb', 'pshufd', 'pslldq', 'psrldq', 'psubb', 'punpcklbw',
+    'punpcklwd', 'pushq', 'pxor', 'rdtsc', 'rep', 'rol', 'ror', 'sar', 'sbb',
+    'setb', 'setbe', 'setle', 'setnb', 'setnbe', 'setnle', 'setnz', 'setnzb',
+    'seto', 'setz', 'setzb', 'shl', 'shr', 'sub', 'subb', 'subl', 'subq',
+    'test', 'testb', 'testl', 'testq', 'tzcnt', 'ucomisdq', 'vmovd', 'vmovdl',
+    'vmovdqax', 'vmovdqay', 'vmovdqux', 'vmovdquy', 'vmovq', 'vmovqq',
+    'vpalignrx', 'vpand', 'vpandn', 'vpbroadcastb', 'vpcmpeqb', 'vpcmpeqbx',
+    'vpcmpeqby', 'vpcmpgtb', 'vpcmpistri', 'vpminub', 'vpmovmskb', 'vpor',
+    'vpslldq', 'vpsubb', 'vpxor', 'vzeroupper', 'xchg', 'xchgl', 'xgetbv',
+    'xor', 'xorl', 'xorps', 'xorq', 'xrstor', 'xsavec', 'andl', 'data', 'andq',
+    'andb', 'leaveq', 'rep stosqq', 'lock cmpxchgl', 'lock decl', 'setbb',
+    'rep stosbb', 'setnl', 'cdq', 'cwd', 'movsbb', 'rep movsbb', 'xchgq',
+    'xaddl', 'xaddq', 'cmpxchgq', 'adcq', 'addb', 'addsdq', 'cld', 'cmovnl',
     'cmovnlel', 'cmovnll', 'cvtsi', 'dec', 'movdl', 'movhpsq', 'movqq', 'mulq',
-    'popfqq', 'punpcklqdq', 'pushfqq', 'pxorx', 'rep cmpsbb', 'rep movsdl', 'rep movsqq',
-    'sbbq', 'setl', 'shll', 'testw', 'vptest', 'xorb', 'bsrq', 'shld', 'fnstcww', 'cvttsd',
-    'subsd', 'cmovlel', 'subw', 'addpd', 'addsd', 'andnpd', 'andpd', 'andpdx', 'andpsx',
-    'btr', 'cmovnzl', 'cmovnzq', 'cmpsd', 'divsd', 'fcomi', 'fdiv', 'fildl', 'fildq',
-    'fldl', 'fmull', 'fstp', 'fstpq', 'fxch', 'idivl', 'lock addl', 'lock addq',
-    'lock cmpxchgq', 'lock subl', 'lock xaddl', 'lock xaddq', 'movapdx', 'movupdx',
-    'mulsd', 'orpd', 'popcnt', 'psrad', 'punpckldq', 'punpckldqx', 'repne scasbb',
-    'sqrtsd', 'subpd', 'subpdx', 'subsdq', 'ucomisd', 'vaddsd', 'vaddsdq', 'vandnpd',
-    'vandpd', 'vandpdx', 'vcomisd', 'vcomisdq', 'vcvtsi', 'vfmadd', 'vfmsub', 'vfnmadd',
-    'vmovapd', 'vmovsdq', 'vmulsd', 'vmulsdq', 'vorpd', 'vstmxcsrl', 'vsubsd', 'vsubsdq',
-    'vucomisd', 'vxorpd', 'vxorpdx', 'xorpd'
+    'popfqq', 'punpcklqdq', 'pushfqq', 'pxorx', 'rep cmpsbb', 'rep movsdl',
+    'rep movsqq', 'sbbq', 'setl', 'shll', 'testw', 'vptest', 'xorb', 'bsrq',
+    'shld', 'fnstcww', 'cvttsd', 'subsd', 'cmovlel', 'subw', 'addpd', 'addsd',
+    'andnpd', 'andpd', 'andpdx', 'andpsx', 'btr', 'cmovnzl', 'cmovnzq', 'cmpsd',
+    'divsd', 'fcomi', 'fdiv', 'fildl', 'fildq', 'fldl', 'fmull', 'fstp',
+    'fstpq', 'fxch', 'idivl', 'lock addl', 'lock addq', 'lock cmpxchgq',
+    'lock subl', 'lock xaddl', 'lock xaddq', 'movapdx', 'movupdx', 'mulsd',
+    'orpd', 'popcnt', 'psrad', 'punpckldq', 'punpckldqx', 'repne scasbb',
+    'sqrtsd', 'subpd', 'subpdx', 'subsdq', 'ucomisd', 'vaddsd', 'vaddsdq',
+    'vandnpd', 'vandpd', 'vandpdx', 'vcomisd', 'vcomisdq', 'vcvtsi', 'vfmadd',
+    'vfmsub', 'vfnmadd', 'vmovapd', 'vmovsdq', 'vmulsd', 'vmulsdq', 'vorpd',
+    'vstmxcsrl', 'vsubsd', 'vsubsdq', 'vucomisd', 'vxorpd', 'vxorpdx', 'xorpd',
+    'cmovsq'
 }
 
 # change of flow
-COF_MNEMONICS = BRANCH_MNEMONICS | CALL_MNEMONICS | SYSCALL_MNEMONICS | RET_MNEMONICS
+COF_MNEMONICS = (BRANCH_MNEMONICS | CALL_MNEMONICS
+        | SYSCALL_MNEMONICS | RET_MNEMONICS)
 
 CUSTOM_MEM_LIBS = ['libjemalloc.so']
 
@@ -136,9 +142,9 @@ class CFGNode(object):
         procmap -- Map from maps.read_maps().
         size -- Size of the basic block, in bytes.
         is_call -- Whether this CFGNode ends with a call instruction.
-        context -- An optional CFGNode to serve as the context for this one. Two
-        nodes with the same RVA + object, but different context are treated as
-        different.
+        context -- An optional CFGNode to serve as the context for this one.
+        Two nodes with the same RVA + object, but different context are treated
+        as different.
         """
         assert isinstance(context, CFGNode) or context is None
         if size < 1:
@@ -158,13 +164,16 @@ class CFGNode(object):
 
         self.context = context
         self.is_call = is_call
+        # parse_ptxed will decide if is_head should be changed to True
+        self.is_head = False
         self.description = self._describe()
 
         self.hash = self._calc_hash()
 
     def _describe(self):
         # start with object name, RVA, and size
-        desc = "%s+%#x[%d]" % (os.path.basename(self.obj['name']), self.rva, self.size)
+        desc = "%s+%#x[%d]" % (os.path.basename(self.obj['name']),
+                               self.rva, self.size)
 
         # if there's a context, include it
         if not self.context is None:
@@ -199,9 +208,6 @@ class CFGNode(object):
 
 def node2key(node):
     return "%s:%d" % (node.obj['name'], node.rva)
-
-def has_node(graph, node):
-    return node in graph.gp.node2idx
 
 def add_node(graph, node):
     if has_node(graph, node):
@@ -240,6 +246,32 @@ def remove_edge(graph, src_node, dst_node):
 
     graph.remove_edge(graph.edge(src_v, dst_v))
 
+def has_node(graph, node):
+    return node in graph.gp.node2idx
+
+def has_edge(graph, src, dst):
+    if not has_node(graph, src):
+        return False
+    src_v = graph.gp.node2idx[src]
+
+    if not has_node(graph, dst):
+        return False
+    dst_v = graph.gp.node2idx[dst]
+
+    if dst_v in graph.get_out_neighbors(src_v):
+        return True
+
+    return False
+
+def has_path(graph, src_idx, dst_idx):
+    return len(shortest_path(graph, src_idx, dst_idx)[0]) > 0
+
+def get_existing_node(graph, node):
+    # raises KeyError if node does not exist in the graph, this can be avoided
+    # by calling has_node first and checking its return value
+    idx = graph.gp.node2idx[node]
+    return graph.vp.node[idx]
+
 def successors(graph, node):
     if not has_node(graph, node):
         return set()
@@ -257,7 +289,8 @@ def predecessors(graph, node):
     return set([graph.vp.node[w] for w in graph.get_in_neighbors(v)])
 
 def rva_lookup(graph, obj_name, rva):
-    """Look up an RVA + object name and return all nodes for that basic block."""
+    """Look up an RVA + object name and return all nodes for that basic
+    block."""
     key = "%s:%d" % (obj_name, rva)
     if key in graph.gp.rva2node:
         return graph.gp.rva2node[key]
@@ -270,7 +303,7 @@ def rva_lookup_node(graph, node):
         return graph.gp.rva2node[key]
     return set()
 
-def parse_ptxed(input, procmap, graph=None):
+def parse_ptxed(input, procmap, graph=None, debug=False):
     """Reads a ptxed disassembly and yields a CFG.
 
     CFG has a function level context sensitivity of 1.
@@ -316,7 +349,7 @@ def parse_ptxed(input, procmap, graph=None):
         line = line.rstrip()  # remove newline character
 
         if line == '[disabled]':
-            log.debug('PTXed: [disabled]')
+            if debug: log.debug('PTXed: [disabled]')
             # tracing turned off, how should we handle the next instruction?
             if not entering_syscall and curr_bb_start_addr is None:
                 # turned off at the end of a basic block, next instruction is
@@ -345,7 +378,7 @@ def parse_ptxed(input, procmap, graph=None):
                 # we skip anything else that isn't an instruction
                 continue
 
-            log.debug("PTXed: %s" % line)
+            if debug: log.debug("PTXed: %s" % line)
 
             # disassembled instruction
             v_addr = int(instr.group(1), 16)
@@ -354,9 +387,9 @@ def parse_ptxed(input, procmap, graph=None):
 
             if not resume_addr is None:
                 if v_addr != resume_addr:
-                    # tracing previously disabled and we resumed somewhere else,
-                    # treat this as the start of a new basic block and do not
-                    # link it with an edge
+                    # tracing previously disabled and we resumed somewhere
+                    # else, treat this as the start of a new basic block and do
+                    # not link it with an edge
                     log.warning("Tracing disabled and resumed somewhere else")
                     curr_bb_start_addr = None
                     prev_node = None
@@ -373,12 +406,22 @@ def parse_ptxed(input, procmap, graph=None):
                 # will be the start of a new one
                 size = v_addr + instr_size - curr_bb_start_addr
                 is_call = mnemonic in CALL_MNEMONICS
-                curr_node = CFGNode(curr_bb_start_addr, procmap, size, is_call, context[-1])
-                add_node(graph, curr_node)
-                if not prev_node is None:
-                    add_edge(graph, prev_node, curr_node)
+                curr_node = CFGNode(curr_bb_start_addr, procmap, size, is_call,
+                                    context[-1])
 
-                log.debug("PTXed: [BB boundary]")
+                if not prev_node is None:
+                    if has_node(graph, curr_node) and not has_edge(graph,
+                            prev_node, curr_node):
+                        # we've returned to a node we've visited before, via a
+                        # new edge, making it a backward edge, so the
+                        # destination is the head of a loop
+                        curr_node = get_existing_node(graph, curr_node)
+                        curr_node.is_head = True
+                    add_edge(graph, prev_node, curr_node)
+                else:
+                    add_node(graph, curr_node)
+
+                if debug: log.debug("PTXed: [BB boundary]")
                 prev_node = curr_node
                 curr_bb_start_addr = None
 
@@ -401,8 +444,10 @@ def parse_ptxed(input, procmap, graph=None):
                 # branches and syscalls do not change context
 
             else:
-                if not mnemonic in BORING_MNEMONICS and not mnemonic in warned_mnemonics:
-                    log.warning("Unhandled mnemonic, treating as boring: %s" % mnemonic)
+                if (not mnemonic in BORING_MNEMONICS and
+                        not mnemonic in warned_mnemonics):
+                    log.warning("Unhandled mnemonic, treating as boring: "
+                                "%s" % mnemonic)
                     warned_mnemonics.add(mnemonic)
                 entering_syscall = False
                 # extra paranoid check that next instruction follows the prior
@@ -414,14 +459,15 @@ def parse_ptxed(input, procmap, graph=None):
 def insert_plt_fakeret(graph):
     """Insert fake returns from PLT stubs and disconnect the real successors.
 
-    This is intended for use in post-processing to create self-contained, per-object
-    CFGs, which simplifies some types of analysis. For example, an algorithm analyzing
-    the control flow of the main object may not care about how printf is implemented,
-    just that the program called it. In otherwords, this analysis turns this:
+    This is intended for use in post-processing to create self-contained,
+    per-object CFGs, which simplifies some types of analysis. For example, an
+    algorithm analyzing the control flow of the main object may not care about
+    how printf is implemented, just that the program called it. In otherwords,
+    this analysis turns this:
 
-    -------------    ------------     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~     -------------
-    | caller BB | => | PLT stub | => { dynamic symbol resolving, etc. } => | return BB |
-    -------------    ------------     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~     -------------
+    -------------    ------------                                -------------
+    | caller BB | => | PLT stub | => ...external execution... => | return BB |
+    -------------    ------------                                -------------
 
     into:
 
@@ -445,7 +491,8 @@ def insert_plt_fakeret(graph):
         for succ in succs:
             remove_edge(graph, node, succ)
 
-        # for each calling predecessor, insert a fake return to its return address
+        # for each calling predecessor, insert a fake return to its return
+        # address
         for pred in preds:
             if not pred.is_call:
                 continue
@@ -461,17 +508,19 @@ def insert_plt_fakeret(graph):
                         break
 
                 if ret_node is None:
-                    log.warning("Cannot find return after %s with correct context "
-                                "(return to RVA %#x)" % (pred, ret_rva))
+                    log.warning("Cannot find return after %s with correct "
+                    "context (return to RVA %#x)" % (pred, ret_rva))
                 else:
                     add_edge(graph, node, ret_node)
-                    # remove predecessor edges from external objects, including the real return
+                    # remove predecessor edges from external objects, including
+                    # the real return
                     ret_preds = predecessors(graph, ret_node)
                     for ret_pred in ret_preds:
                         if ret_pred.obj['name'] != ret_node.obj['name']:
                             remove_edge(graph, ret_pred, ret_node)
             else:
-                log.warning("Cannot find return after %s (return to RVA %#x)" % (pred, ret_rva))
+                log.warning("Cannot find return after %s (return to RVA "
+                            "%#x)" % (pred, ret_rva))
 
 def should_skip_obj(name, filter_keywords):
     """Decides whether an object should be skipped based on the name
@@ -512,16 +561,26 @@ def should_skip_obj(name, filter_keywords):
 def find_exec_units(graph, filter_keywords=None, timeout_str='0s'):
     """Find execution units in the graph.
 
-    An execution unit (EU) is defined as an autonomous unit of work, consisting of a group of
-    basic blocks with explicit entry and exit points. Entering an EU starts an instance,
-    exiting ends it. Since EUs are autonomous, two different instances share no data
-    dependencies.
+    An execution unit (EU) is defined as an autonomous unit of work, consisting
+    of a group of basic blocks with explicit entry and exit points. Entering an
+    EU starts an instance, exiting ends it. Since EUs are autonomous, two
+    different instances share no data dependencies and no use-after-free or
+    double free bugs can occur between them (but can still occur within the
+    same instance).
+
+    Heuristically, EUs are often approximated by finding the outter most loop of
+    the program, which is expected to iterate once per task the program
+    performs, creating one EU instance per task. Assuming tasks are
+    independent, this satisfies the EU definition.
+
+    Not all programs are designed to perform a variable number of tasks. In such
+    cases, it is fine to treat the entire program as a single EU which only ever
+    spawns one instance.
 
     Each returned unit is a dictionary with the following keys:
     object -- Name of the object the unit was found in.
-    entries -- Nodes within the unit that can be the start of an instance.
-    exits -- Nodes within the unit that could lead outside, thereby ending an instance.
-    nodes -- All the nodes in the execution unit.
+    filter -- The object's vertex filter
+    head -- Node that marks the head of the unit.
 
     Returns:
     A list of execution units, see above for layout.
@@ -530,6 +589,7 @@ def find_exec_units(graph, filter_keywords=None, timeout_str='0s'):
     skipped_objs = set()
     parsed_objs = set()
     obj2filter = dict()
+    objheads = dict()
 
     for v in graph.vertices():
         node = graph.vp.node[v]
@@ -553,6 +613,14 @@ def find_exec_units(graph, filter_keywords=None, timeout_str='0s'):
             # mark so we don't have to recheck again
             parsed_objs.add(obj_name)
 
+        # record loop heads for future reference
+        if not obj_name in objheads:
+            objheads[obj_name] = set()
+
+        if node.is_head:
+            objheads[obj_name].add(v)
+
+        # record node mask
         if not obj_name in obj2filter:
             obj2filter[obj_name] = graph.new_vertex_property("bool", val=0)
 
@@ -565,104 +633,83 @@ def find_exec_units(graph, filter_keywords=None, timeout_str='0s'):
     units = list()
 
     for obj in obj2filter:
-        # Step 2a: find all simple cycles
-        log.debug("Finding cycles for: %s" % os.path.basename(obj))
+        heads = list(objheads[obj])
+        heads.sort()
+        log.info("Finding EUs in %s, starting from %d loop "
+                 "heads" % (os.path.basename(obj), len(heads)))
+        log.debug("Heads: %s" % ', '.join(
+                [str(graph.vp.node[n]) for n in heads]))
+
+        # restrict analysis to current object
         filter = obj2filter[obj]
         graph.set_vertex_filter(filter)
-        simples = all_circuits(graph, unique=True)
 
-        # Step 2b: merge together simple cycles that share any nodes in common
-        simple_vs = graph.new_vertex_property("bool", val=0)
+        # Step 2a: merge heads to find the outter-most ones
+        #
+        # We use a trick here, which is that node IDs are assigned sequentially,
+        # meaning lower numbers occurred earlier in the traces and are therefore
+        # more likely to be outter-most.
+        if len(heads) < 1:
+            log.warning("No heads, no partitions")
+            continue
 
-        start_timeout(timeout_str)
+        merged = [heads[0]]
         try:
-            for cycle in simples:
-                simple_vs.a[cycle] = 1
-            # cancel alarm, if one was set
+            # user may set a timeout for performing merges
+            start_timeout(timeout_str)
+
+            for v in heads[1:]:
+                should_merge = False
+                for h in merged:
+                    if has_path(graph, h, v) and has_path(graph, v, h):
+                        should_merge = True
+                        break
+                if not should_merge:
+                    # v is a loop head that cannot be reached from any of the
+                    # current merged heads, add it as a new merged head
+                    merged.append(v)
+
+            # we're done, cancel alarm if one was set
             signal.alarm(0)
         except AnalysisTimeout:
-            log.warning("Reached timeout, ending cycle search early")
+            log.warning("Reached timeout, proceeding with current results")
 
-        graph.set_vertex_filter(simple_vs)
-        merged_cycs, cyc_hist = label_components(graph)
-        # immediately convert merged_cycs, otherwise it'll change based on the graph filters
-        merged_cycs = merged_cycs.ma.filled()
-        graph.set_vertex_filter(filter)
+        # Step 2b: record execution units
+        log.info("Found %d units" % len(merged))
+        log.debug("Unit heads: %s" % ', '.join(
+                [str(graph.vp.node[n]) for n in merged]))
 
-        log.info("Found %d cycles in %s" % (len(cyc_hist), os.path.basename(obj)))
-
-        # Step 2c: identify which nodes are entries and exits
-        #
-        # Note: When we say entry/exit node, we mean the first/last node *within* the
-        # execution unit that could start/end an instance. E.g., an exit node can be a branching
-        # basic block where one edge leads to another iteration of a loop (continuing the
-        # instance) and the other leads to a block outside the unit, thereby ending it.
-        for label in range(len(cyc_hist)):
-            entries = set()
-            exits = set()
-
-            cycle = np.where(merged_cycs == label)[0]
-
-            for idx in cycle:
-                node = graph.vp.node[graph.vertex(idx)]
-
-                if not node.plt_sym is None:
-                    # PLT stubs cannot be entries or exits
-                    continue
-
-                for pred in predecessors(graph, node):
-                    if not graph.gp.node2idx[pred] in cycle:
-                        entries.add(node)
-                        break
-                for succ in successors(graph, node):
-                    if not graph.gp.node2idx[succ] in cycle:
-                        exits.add(node)
-                        break
-
-            if len(entries) > 0 and len(exits) > 0:
-                log.debug("Found cycle in %s with %d nodes, %d entries, %d exits" % (
-                          os.path.basename(obj), len(cycle), len(entries), len(exits)))
-                units.append({'object': obj, 'entries': entries, 'exits': exits,
-                              'nodes': set([graph.vp.node[graph.vertex(v)] for v in cycle])})
-            elif len(entries) < 1:
-                log.debug("Skipped possible unit with no entries")
-            elif len(exits) < 1:
-                log.debug("Skipped possible unit with no exits")
+        for v in merged:
+            units.append({'object': obj,
+                          'filter': filter,
+                          'head': graph.vp.node[v]})
 
     graph.clear_filters()
 
     log.info("Total units found: %d" % len(units))
     return units
 
-def find_release_sites(graph, units):
+def find_release_sites(graph, units, max_distance=-1):
     """Find quarantine release sites based on a graph and the identified EUs.
 
-    Adds a new key to each unit in units, 'safe_callers', which is a set of nodes
-    that call into an instrumented function from a context where it is safe to
-    release the quarantine list.
+    Adds a new key to each unit in units, 'safe_callers', which is a set of
+    nodes that call into an instrumented function from a context where it is
+    safe to release the quarantine list.
 
-    Returns the number of safe callers found.
+    At enforcement time, function context sensitivity will not be available,
+    so the release sites have to be safe in any context.
+
+    Returns:
+    Number of safe callers found.
     """
-    # At enforcement time, function context sensitivity will not be available,
-    # so the release sites have to be safe in any context.
-
-    # functions in the instrumented library that can release the quarantine list
-    rel_funcs = ['free', 'realloc', 'reallocarray']
+    # functions in the instrumented library that can release the quarantine
+    rel_funcs = ['malloc', 'calloc', 'realloc', 'reallocarray']
     # find all PLT stubs that call the instrumented functions
     plts_global = set()
     for v in graph.vertices():
         node = graph.vp.node[v]
         if node.plt_sym in rel_funcs:
             plts_global.add(node)
-
-    # build per-object sets of all nodes belonging to basic blocks that are in a unit
-    obj2ublocks = dict()
-    for unit in units:
-        unit_obj = unit['object']
-        if not unit_obj in obj2ublocks:
-            obj2ublocks[unit_obj] = set()
-        for unit_node in unit['nodes']:
-            obj2ublocks[unit_obj] |= rva_lookup_node(graph, unit_node)
 
     num_units = len(units)
     units_with_releases = 0
@@ -671,28 +718,72 @@ def find_release_sites(graph, units):
     for unit in units:
         # object this unit belongs to
         unit_obj = unit['object']
-        # get the PLTs for the object this unit belongs to
-        unit_plts = set([plt for plt in plts_global if plt.obj['name'] == unit_obj])
-        # all nodes corresponding to basic blocks associated with units in this object
-        obj_unit_blocks = obj2ublocks[unit_obj]
+        log.info("Analyzing: %s" % str(unit['head']))
 
-        # for each PLT, if there's a caller basic block that is not in an execution
-        # unit under any context, this is a safe context to release the quarantine list
-        unit['safe_callers'] = set()
+        # get the PLTs for the object this unit belongs to
+        unit_plts = set([plt for plt in plts_global if
+                plt.obj['name'] == unit_obj])
+        # get all callers in the object that call the object's PLTs
+        unit_callers = set()
         for plt in unit_plts:
             for pred in predecessors(graph, plt):
-                if not pred in obj_unit_blocks:
-                    unit['safe_callers'].add(pred)
+                if pred.obj['name'] == unit_obj:
+                    unit_callers.add(pred)
 
+        log.debug("Number of PLTs:    %d" % len(unit_plts))
+        log.debug("Number of callers: %d" % len(unit_callers))
+
+        unit['safe_callers'] = set()
+
+        # for each caller, can it be reached from the unit's head without going
+        # through any other callers?
+        for caller in unit_callers:
+
+            # trivial case: unit head ends with a call to one of the PLTs
+            if unit['head'] == caller:
+                unit['safe_callers'].add(unit['head'])
+                # if this happens, we don't need any additional safe callers
+                # because this one will always occur at the start of each
+                # EU instance
+                break
+
+            # normal case: do a path search
+            # mask for current object
+            filter = unit['filter'].copy()
+            # also mask out every other caller
+            for other in unit_callers:
+                if other != caller:
+                    filter[graph.gp.node2idx[other]] = 0
+
+            # set filter and search for path
+            graph.set_vertex_filter(filter)
+
+            h_idx = graph.gp.node2idx[unit['head']]
+            c_idx = graph.gp.node2idx[caller]
+            spath_len = len(shortest_path(graph, h_idx, c_idx)[0])
+
+            # is this the first allocation of the unit?
+            if spath_len > 0 and (max_distance < 0 or
+                                  spath_len <= max_distance):
+                # then it marks the start of a new EU instance and previous
+                # deallocations can be released from quarantine
+                unit['safe_callers'].add(caller)
+
+            # clear filter
+            graph.clear_filters()
+
+        # some bookkeeping for statistics
         unit_safe_callers = len(unit['safe_callers'])
         num_safe_callers += unit_safe_callers
         if unit_safe_callers > 0:
             units_with_releases += 1
 
-    log.info("Found safe callers for %d of %d units" % (units_with_releases, num_units))
+    log.info("Found safe callers for %d of %d units" % (units_with_releases,
+             num_units))
     assert units_with_releases <= num_units
     if units_with_releases < num_units:
-        log.warning("Some units have no safe callers for releasing the quarantine list")
+        log.warning("Some units have no safe callers for releasing the "
+                    "quarantine list")
 
     return num_safe_callers
 
@@ -718,7 +809,8 @@ def resolve_output_filepath(options, name):
 
     # check if we're allowed to write to this output
     if os.path.exists(output_fp) and not os.path.isfile(output_fp):
-        log.error("Output filepath for profile already exists and is not a file")
+        log.error("Output filepath for profile already exists and is not a "
+                  "file")
         return None
     if os.path.isfile(output_fp) and not options.force:
         log.error("Output filepath for profile already exists, if you want to "
@@ -736,7 +828,8 @@ def resolve_output_filepath(options, name):
 def write_profile(profile_fp, units, maps):
     """Writes a profile to disk based on the data gathered on EUs.
 
-    Assumes profile_fp has already been validated via resolve_output_filepath().
+    Assumes profile_fp has already been validated via
+    resolve_output_filepath().
     """
     safe_callers = set()
     for unit in units:
@@ -744,13 +837,15 @@ def write_profile(profile_fp, units, maps):
             continue
         for caller in unit['safe_callers']:
             # record caller's return address, this is what'll appear on stack
-            safe_callers.add("%s:%0x\n" % (caller.obj['name'], caller.rva + caller.size))
+            safe_callers.add("%s:%0x\n" % (caller.obj['name'],
+                    caller.rva + caller.size))
 
     if len(safe_callers) < 1:
         # no safe callers, create an OTA profile by adding a nonexistent caller
         log.warning("Creating an OTA policy")
         main_obj = maps[0]['cle'].main_object
-        safe_callers.add("%s:%0x\n" % (main_obj.binary, main_obj.max_addr - main_obj.min_addr))
+        safe_callers.add("%s:%0x\n" % (main_obj.binary,
+                main_obj.max_addr - main_obj.min_addr))
 
     with open(profile_fp, 'w') as ofile:
         for caller in safe_callers:
@@ -771,20 +866,26 @@ def load_maps(trace_fp):
 
 def main():
     parser = OptionParser(usage='Usage: %prog [options] 1.ptxed[.gz] ...')
+    parser.add_option('-l', '--logging', action='store', type='int',
+            default=20, help='Log level [10-50] (default: 20 - Info)')
+    parser.add_option('--debug-pt', action='store_true', default=False,
+            help='Include PT debug messages in debug log (very verbose)')
     parser.add_option('-n', '--no-fakeret', action='store_true', default=False,
             help='Insert fake returns for calls to imported functions.')
-    parser.add_option('-l', '--logging', action='store', type='int', default=20,
-            help='Log level [10-50] (default: 20 - Info)')
-    parser.add_option('-o', '--output', action='store', type='str', default=None,
-            help='Override output filepath for storing generated profile')
+    parser.add_option('-d', '--distance', action='store', type='int',
+            default=-1, help='Limit max distance for safe caller search')
+    parser.add_option('-o', '--output', action='store', type='str',
+            default=None, help='Override output filepath for storing generated'
+            ' profile')
     parser.add_option('-f', '--force', action='store_true', default=False,
             help='Overwrite output filepath if it already exists')
-    parser.add_option('-p', '--partition', action='store', type='str', default=None,
-            help='A comma seperated list of substrings denoting which objects '
-                 'should be partitioned')
-    parser.add_option('-t', '--timeout', action='store', type='str', default='0',
-            help='Set timeout for cycle detection, supports suffixes s, m, and h, '
-                 'timeout is per-object (default: no timeout)')
+    parser.add_option('-p', '--partition', action='store', type='str',
+            default=None, help='A comma seperated list of substrings denoting'
+            ' which objects should be partitioned')
+    parser.add_option('-t', '--timeout', action='store', type='str',
+            default='0', help='Set timeout for cycle detection, supports '
+            'suffixes s, m, and h, timeout is per-object (default: no '
+            'timeout)')
 
     options, args = parser.parse_args()
 
@@ -798,7 +899,8 @@ def main():
     # init stdout logging
     log.setLevel(options.logging)
     handler = logging.StreamHandler()
-    handler.setFormatter(logging.Formatter('%(levelname)7s | %(asctime)-15s | %(message)s'))
+    handler.setFormatter(logging.Formatter('%(levelname)7s | %(asctime)-15s '
+            '| %(message)s'))
     log.addHandler(handler)
 
     # init graph and procmap, specify which positional args are traces
@@ -818,8 +920,8 @@ def main():
     for filepath in traces:
         procmap = load_maps(filepath)
 
-        # warn if the traced program appears to be using a custom memory manager,
-        # protection requires an instrumented implementation
+        # warn if the traced program appears to be using a custom memory
+        # manager, protection requires an instrumented implementation
         for bin_obj in procmap:
             try:
                 libbase = os.path.basename(bin_obj['name'])
@@ -828,12 +930,13 @@ def main():
 
             for mem_name in CUSTOM_MEM_LIBS:
                 if libbase.startswith(mem_name):
-                    log.warn("Program appears to use custom memory manager: %s" % libbase)
+                    log.warn("Program appears to use custom memory manager:"
+                             " %s" % libbase)
                     break
 
         log.info("Parsing: %s" % filepath)
         try:
-            graph = parse_ptxed(filepath, procmap, graph)
+            graph = parse_ptxed(filepath, procmap, graph, options.debug_pt)
         except KeyboardInterrupt as ex:
             raise ex
         except:
@@ -854,7 +957,7 @@ def main():
         num_rels = 0
     else:
         log.info("Searching for quarantine release sites")
-        num_rels = find_release_sites(graph, units)
+        num_rels = find_release_sites(graph, units, options.distance)
 
     if num_rels < 1:
         log.warning("No sites found, profile will be OTA")
