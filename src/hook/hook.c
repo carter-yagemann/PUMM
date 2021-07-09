@@ -410,11 +410,24 @@ void free(void *ptr) {
 
 void *calloc(size_t nmemb, size_t size) {
     void *caller = __builtin_extract_return_addr(__builtin_return_address(0));
+    void *ptr;
+    size_t total;
 
     if (nmemb == 0 || size == 0)
         return NULL;
 
-    return do_malloc(nmemb * size, caller);
+    total = nmemb * size;
+
+    if (nmemb != 0 && total / nmemb != size) {
+        // overflow
+        errno = ENOMEM;
+        return NULL;
+    }
+
+    ptr = do_malloc(total, caller);
+    if (ptr)
+        memset(ptr, 0, total);
+    return ptr;
 }
 
 void *realloc(void *ptr, size_t size) {
