@@ -25,9 +25,9 @@ if [ ! -f "$PTDUMP" ]; then
 fi
 
 find -name "perf.data-aux-idx*.bin" -type f | \
-    xargs -P $(nproc) -n 1 -I {} /bin/bash -c "\
+    xargs -P $(nproc) -I {} /bin/bash -c "\
         LD_LIBRARY_PATH="$LIB_DIR" $PTDUMP --no-pad --no-timing --no-cyc --lastip \
             $($IPT_SCRIPTS_DIR/perf-get-opts.bash) {} \
             > {}.ptdump"
 
-find -name "*.ptdump" -type f | xargs -P $(nproc) -n 1 -I {} gzip {}
+find -name "*.ptdump" -type f | xargs -P $(nproc) -I {} gzip {}
