@@ -21,9 +21,7 @@ import logging
 from optparse import OptionParser
 import os
 import re
-import signal
 import sys
-import tempfile
 from traceback import format_exc
 import warnings
 
@@ -108,28 +106,6 @@ COF_MNEMONICS = (BRANCH_MNEMONICS | CALL_MNEMONICS
         | SYSCALL_MNEMONICS | RET_MNEMONICS)
 
 CUSTOM_MEM_LIBS = ['libjemalloc.so']
-
-# simple timeout handler
-class AnalysisTimeout(Exception):
-    pass
-
-def timeout_handler(signum, frame):
-    raise AnalysisTimeout("Timeout reached")
-
-def start_timeout(timeout_str):
-    timeout_str = timeout_str.lower()
-    if timeout_str.endswith('s'):
-        timeout = int(timeout_str[:-1])
-    elif timeout_str.endswith('m'):
-        timeout = int(timeout_str[:-1]) * 60
-    elif timeout_str.endswith('h'):
-        timeout = int(timeout_str[:-1]) * 60 * 60
-    else:
-        timeout = int(timeout_str)
-
-    if timeout > 0:
-        signal.signal(signal.SIGALRM, timeout_handler)
-        signal.alarm(timeout)
 
 
 class CFGNode(object):
@@ -303,7 +279,7 @@ def rva_lookup_node(graph, node):
         return graph.gp.rva2node[key]
     return set()
 
-def parse_ptxed(input, procmap, graph=None, debug=False):
+def parse_ptxed(input, procmap, graph=None, apply_context=True, debug=False):
     """Reads a ptxed disassembly and yields a CFG.
 
     CFG has a function level context sensitivity of 1.
@@ -313,7 +289,10 @@ def parse_ptxed(input, procmap, graph=None, debug=False):
     be treated as a gzip file.
     procmap -- Map from maps.read_maps().
     graph -- A directed graph to update. If None, a new graph is
-    created
+    created.
+    apply_context -- Make the graph caller context sensitive (more accurate,
+    but also larger).
+    debug -- Whether to print debug log messages for PT decoding.
 
     Returns:
     A CFG as a directed graph
@@ -406,8 +385,16 @@ def parse_ptxed(input, procmap, graph=None, debug=False):
                 # will be the start of a new one
                 size = v_addr + instr_size - curr_bb_start_addr
                 is_call = mnemonic in CALL_MNEMONICS
-                curr_node = CFGNode(curr_bb_start_addr, procmap, size, is_call,
-                                    context[-1])
+
+                if apply_context:
+                    curr_context = context[-1]
+                else:
+                    curr_context = None
+
+                curr_node = CFGNode(curr_bb_start_addr,
+                                    procmap, size,
+                                    is_call,
+                                    curr_context)
 
                 if not prev_node is None:
                     if has_node(graph, curr_node) and not has_edge(graph,
@@ -558,7 +545,7 @@ def should_skip_obj(name, filter_keywords):
     # should be unreachable
     assert False
 
-def find_exec_units(graph, filter_keywords=None, timeout_str='0s'):
+def find_exec_units(graph, filter_keywords=None):
     """Find execution units in the graph.
 
     An execution unit (EU) is defined as an autonomous unit of work, consisting
@@ -654,25 +641,17 @@ def find_exec_units(graph, filter_keywords=None, timeout_str='0s'):
             continue
 
         merged = [heads[0]]
-        try:
-            # user may set a timeout for performing merges
-            start_timeout(timeout_str)
 
-            for v in heads[1:]:
-                should_merge = False
-                for h in merged:
-                    if has_path(graph, h, v) and has_path(graph, v, h):
-                        should_merge = True
-                        break
-                if not should_merge:
-                    # v is a loop head that cannot be reached from any of the
-                    # current merged heads, add it as a new merged head
-                    merged.append(v)
-
-            # we're done, cancel alarm if one was set
-            signal.alarm(0)
-        except AnalysisTimeout:
-            log.warning("Reached timeout, proceeding with current results")
+        for v in heads[1:]:
+            should_merge = False
+            for h in merged:
+                if has_path(graph, h, v) and has_path(graph, v, h):
+                    should_merge = True
+                    break
+            if not should_merge:
+                # v is a loop head that cannot be reached from any of the
+                # current merged heads, add it as a new merged head
+                merged.append(v)
 
         # Step 2b: record execution units
         log.info("Found %d units" % len(merged))
@@ -868,12 +847,6 @@ def main():
     parser = OptionParser(usage='Usage: %prog [options] 1.ptxed[.gz] ...')
     parser.add_option('-l', '--logging', action='store', type='int',
             default=20, help='Log level [10-50] (default: 20 - Info)')
-    parser.add_option('--debug-pt', action='store_true', default=False,
-            help='Include PT debug messages in debug log (very verbose)')
-    parser.add_option('-n', '--no-fakeret', action='store_true', default=False,
-            help='Insert fake returns for calls to imported functions.')
-    parser.add_option('-d', '--distance', action='store', type='int',
-            default=-1, help='Limit max distance for safe caller search')
     parser.add_option('-o', '--output', action='store', type='str',
             default=None, help='Override output filepath for storing generated'
             ' profile')
@@ -882,10 +855,13 @@ def main():
     parser.add_option('-p', '--partition', action='store', type='str',
             default=None, help='A comma seperated list of substrings denoting'
             ' which objects should be partitioned')
-    parser.add_option('-t', '--timeout', action='store', type='str',
-            default='0', help='Set timeout for cycle detection, supports '
-            'suffixes s, m, and h, timeout is per-object (default: no '
-            'timeout)')
+    parser.add_option('-n', '--no-context', action='store_true', default=False,
+            help='Disable caller context sensitivity (faster analysis, but may'
+            ' be less accurate)')
+    parser.add_option('-d', '--distance', action='store', type='int',
+            default=-1, help='Limit max distance for safe caller search')
+    parser.add_option('--debug-pt', action='store_true', default=False,
+            help='Include PT debug messages in debug log (very verbose)')
 
     options, args = parser.parse_args()
 
@@ -936,21 +912,25 @@ def main():
 
         log.info("Parsing: %s" % filepath)
         try:
-            graph = parse_ptxed(filepath, procmap, graph, options.debug_pt)
+            graph = parse_ptxed(filepath,
+                                procmap,
+                                graph,
+                                not options.no_context,
+                                options.debug_pt)
+
         except KeyboardInterrupt as ex:
             raise ex
         except:
             log.error("Failed to parse trace: %s" % format_exc())
 
-    if not options.no_fakeret:
-        log.info("Inserting fake returns")
-        insert_plt_fakeret(graph)
+    log.info("Inserting fake returns")
+    insert_plt_fakeret(graph)
 
     log.info("Number of nodes: %d" % graph.num_vertices())
     log.info("Number of edges: %d" % graph.num_edges())
 
     log.info("Starting execution unit partitioning")
-    units = find_exec_units(graph, options.partition, options.timeout)
+    units = find_exec_units(graph, options.partition)
 
     if len(units) < 1:
         log.error("No execution units found, nothing to partition")
