@@ -22,6 +22,12 @@ if (( $# < 1 )); then
     exit 1
 fi
 
+which python3 &> /dev/null
+if [ $? -ne 0 ]; then
+    echo "Could not resolve required program python3"
+    exit 1
+fi
+
 sudo perf record -e intel_pt//u -T --switch-events -- $@
 sudo chown "$USER" perf.data
 
@@ -33,3 +39,4 @@ set -e
 # the trace to another machine or even just changing the installed
 # packages can render it useless.
 "$(dirname $0)/procmap.sh"
+"$(dirname $0)/dump-vdso.py" ./vdso
