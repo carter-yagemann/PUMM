@@ -22,9 +22,9 @@ if (( $# < 1 )); then
     exit 1
 fi
 
-which python3 &> /dev/null
+which python &> /dev/null
 if [ $? -ne 0 ]; then
-    echo "Could not resolve required program python3"
+    echo "Could not resolve required program: python"
     exit 1
 fi
 
