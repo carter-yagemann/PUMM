@@ -16,6 +16,7 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 import base64
+from datetime import datetime
 import gzip
 import logging
 from optparse import OptionParser
@@ -843,6 +844,56 @@ def load_maps(trace_fp):
         raise NoMapsException("No map file found for: %s" % map_fp)
     return maps.read_maps(map_fp)
 
+def generate_profile_from_graph(graph, procmap, profile_fp, max_distance=-1,
+        filter_keywords=None, logfile=None):
+    """Generate a profile based on the provided graph and save it.
+
+    Keyword Arguments:
+    graph -- A directed control flow graph.
+    procmap -- A process memory mapping.
+    profile_fp -- Path where the resulting profile should be saved.
+    max_distance -- Limit max distance to search for safe callers,
+    -1 denotes no limit.
+    filter_keywords -- Only analyze objects containing one or more
+    of the provided list of keywords.
+    logfile -- Record additional evaluation metrics to the provided
+    file object (must provide write method) in CSV format.
+    """
+    start_time = datetime.now()
+
+    # make a copy of the graph so we don't modify the original
+    graph = Graph(graph)
+
+    log.info("Inserting fake returns")
+    insert_plt_fakeret(graph)
+
+    log.info("Number of nodes: %d" % graph.num_vertices())
+    log.info("Number of edges: %d" % graph.num_edges())
+
+    log.info("Starting execution unit partitioning")
+    units = find_exec_units(graph, filter_keywords)
+
+    if len(units) < 1:
+        log.error("No execution units found, nothing to partition")
+        num_rels = 0
+    else:
+        log.info("Searching for quarantine release sites")
+        num_rels = find_release_sites(graph, units, max_distance)
+
+    if num_rels < 1:
+        log.warning("No sites found, profile will be OTA")
+
+    end_time = datetime.now()
+    time_sec = (end_time - start_time).total_seconds()
+
+    if logfile:
+        logfile.write("%d,%d,%d,%d,%d,%s\n" % (graph.num_vertices(),
+                graph.num_edges(), len(units), num_rels,
+                time_sec, os.path.realpath(profile_fp)))
+
+    log.info("Writing profile to: %s" % profile_fp)
+    write_profile(profile_fp, units, procmap)
+
 def main():
     parser = OptionParser(usage='Usage: %prog [options] 1.ptxed[.gz] ...')
     parser.add_option('-l', '--logging', action='store', type='int',
@@ -862,6 +913,9 @@ def main():
             default=-1, help='Limit max distance for safe caller search')
     parser.add_option('--debug-pt', action='store_true', default=False,
             help='Include PT debug messages in debug log (very verbose)')
+    parser.add_option('--incremental', action='store', type='str',
+            default=None, help='Save incremental results (for evaluation'
+            ' purposes) to the provided directory')
 
     options, args = parser.parse_args()
 
@@ -886,14 +940,29 @@ def main():
 
     # validate profile output path is feasible
     main_obj = procmap[0]['cle'].main_object
-    profile_fp = resolve_output_filepath(options,
-            base64.b64encode(main_obj.binary.encode('utf8')).decode('ascii'))
+    main_obj_hash = base64.b64encode(main_obj.binary.encode('utf8')).decode('ascii')
+    profile_fp = resolve_output_filepath(options, main_obj_hash)
     if profile_fp is None:
         log.error("Cannot resolve filepath to store generated profile")
         sys.exit(1)
 
+    # if user requested incremental results, prepare provided directory
+    if options.incremental:
+        if not os.path.exists(options.incremental):
+            try:
+                os.mkdir(options.incremental)
+            except FileExistsError:
+                log.error("Failed to create directory: %s" % options.incremental)
+                sys.exit(1)
+        else:
+            log.error("Already exists, cannot overwrite: %s" % options.incremental)
+            sys.exit(1)
+
+        inc_logfile = open(os.path.join(options.incremental, 'metrics.csv'), 'w')
+        inc_logfile.write("nodes,edges,units,release_points,time(s),filepath\n")
+
     # parse PT traces into graph
-    for filepath in traces:
+    for iter_idx, filepath in enumerate(traces):
         procmap = load_maps(filepath)
 
         # warn if the traced program appears to be using a custom memory
@@ -912,38 +981,33 @@ def main():
 
         log.info("Parsing: %s" % filepath)
         try:
+            # add next trace to graph
             graph = parse_ptxed(filepath,
                                 procmap,
                                 graph,
                                 not options.no_context,
                                 options.debug_pt)
 
+            # if incremental metrics requested, record this iteration
+            if options.incremental:
+                iter_fp = os.path.join(options.incremental, str(iter_idx),
+                        main_obj_hash)
+                os.mkdir(os.path.dirname(iter_fp))
+                generate_profile_from_graph(graph, procmap, iter_fp,
+                        options.distance, options.partition, inc_logfile)
+
         except KeyboardInterrupt as ex:
             raise ex
         except:
             log.error("Failed to parse trace: %s" % format_exc())
 
-    log.info("Inserting fake returns")
-    insert_plt_fakeret(graph)
+    if options.incremental:
+        log.info("Incremental metrics written to: %s" % options.incremental)
+        inc_logfile.close()
 
-    log.info("Number of nodes: %d" % graph.num_vertices())
-    log.info("Number of edges: %d" % graph.num_edges())
-
-    log.info("Starting execution unit partitioning")
-    units = find_exec_units(graph, options.partition)
-
-    if len(units) < 1:
-        log.error("No execution units found, nothing to partition")
-        num_rels = 0
-    else:
-        log.info("Searching for quarantine release sites")
-        num_rels = find_release_sites(graph, units, options.distance)
-
-    if num_rels < 1:
-        log.warning("No sites found, profile will be OTA")
-
-    log.info("Writing profile to: %s" % profile_fp)
-    write_profile(profile_fp, units, procmap)
+    # generate security profile and save it
+    generate_profile_from_graph(graph, procmap, profile_fp,
+            options.distance, options.partition)
 
 if __name__ == "__main__":
     main()
