@@ -28,10 +28,6 @@
 #include <sys/queue.h>
 #include <unistd.h>
 
-#ifdef SCAN
-#include <stdint.h>
-#endif
-
 #include "base64.h"
 
 
@@ -43,11 +39,6 @@
 
 #define CONFIG_DIR "/.config/uaf-defense/"
 #define MAX_POLICY_SIZE 1024
-
-
-#ifdef SCAN
-void scan_dangling();
-#endif
 
 
 /* Hooks */
@@ -65,9 +56,6 @@ STAILQ_HEAD(free_head, pending_free) pending_frees =
 
 struct pending_free {
     void *ptr;
-#ifdef SCAN
-    int refs;
-#endif
     STAILQ_ENTRY(pending_free) entries;
 };
 
@@ -83,9 +71,6 @@ void queue_free(void *ptr) {
     }
 
     pending->ptr = ptr;
-#ifdef SCAN
-    pending->refs = 0;
-#endif
 
     DEBUG_PRINT("Queueing: %p\n", ptr);
     STAILQ_INSERT_TAIL(&pending_frees, pending, entries);
@@ -354,9 +339,6 @@ void *do_malloc(size_t size, void *caller) {
     }
 
     if (should_flush(caller)) {
-#ifdef SCAN
-        scan_dangling();
-#endif
         flush_frees();
     }
 
@@ -447,65 +429,3 @@ void *reallocarray(void *ptr, size_t nmemb, size_t size) {
 
     return do_realloc(ptr, total, caller);
 }
-
-
-#ifdef SCAN
-/*
- * Called prior to flushing the quarantine list. Scans heap looking for any
- * possible pointers to the chunks that are about to be freed and records
- * the number of occurrences for each to stderr.
- */
-void scan_dangling() {
-    void *heap_base = NULL;
-    void *limit = NULL;
-    void *ptr;
-    uintptr_t val;
-    struct maps_obj *obj;
-    struct pending_free *pending;
-
-    // check if a profile is loaded
-    if (!safe_callers[0])
-        return;
-
-    // get base of heap
-    STAILQ_FOREACH(obj, &maps, entries) {
-        if (!strcmp(obj->name, "[heap]")) {
-            heap_base = obj->start_va;
-            break;
-        }
-    }
-
-    if (!heap_base) {
-        fprintf(stderr, "Failed to get heap base\n");
-        return;
-    }
-
-    // get limit
-    limit = sbrk(0);
-
-    if (limit < heap_base) {
-        fprintf(stderr, "Failed to find limit\n");
-        return;
-    }
-
-    // perform scan
-    for (ptr = heap_base; ptr < limit; ptr += sizeof(uintptr_t)) {
-        val = *((uintptr_t *) ptr);
-
-        // we don't need to check the pending frees for any values that
-        // clearly aren't pointing to the heap
-        if ((void *) val < heap_base || (void *) val >= limit)
-            continue;
-
-        STAILQ_FOREACH(pending, &pending_frees, entries) {
-            if ((void *) val == pending->ptr)
-                pending->refs++;
-        }
-    }
-
-    // print stats
-    STAILQ_FOREACH(pending, &pending_frees, entries) {
-        fprintf(stderr, "Scan: %p %d\n", pending->ptr, pending->refs);
-    }
-}
-#endif
