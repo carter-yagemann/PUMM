@@ -886,13 +886,19 @@ def generate_profile_from_graph(graph, procmap, profile_fp, max_distance=-1,
     end_time = datetime.now()
     time_sec = (end_time - start_time).total_seconds()
 
-    if logfile:
-        logfile.write("%d,%d,%d,%d,%d,%s\n" % (graph.num_vertices(),
-                graph.num_edges(), len(units), num_rels,
-                time_sec, os.path.realpath(profile_fp)))
-
     log.info("Writing profile to: %s" % profile_fp)
     write_profile(profile_fp, units, procmap)
+
+    profile_size = 0
+    with open(profile_fp, 'r') as ifile:
+        for line in ifile:
+            if len(line.strip()) > 0:
+                profile_size += 1
+
+    if logfile:
+        logfile.write("%d,%d,%d,%d,%d,%s\n" % (graph.num_vertices(),
+                graph.num_edges(), len(units), profile_size,
+                time_sec, os.path.realpath(profile_fp)))
 
 def main():
     parser = OptionParser(usage='Usage: %prog [options] 1.ptxed[.gz] ...')
