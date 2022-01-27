@@ -6,6 +6,7 @@ C_DEBUG_FLAGS = -g -DDEBUG
 all:
 	$(CC) $(C_BASE_FLAGS) $(C_PROD_FLAGS) hook.c -o hook.so
 	$(CC) $(C_BASE_FLAGS) $(C_DEBUG_FLAGS) hook.c -o hook-debug.so
+	$(CC) $(C_BASE_FLAGS) -g -DEVIL_MONKEY hook.c -o hook-monkey.so
 
 clean:
 	rm -f *.so

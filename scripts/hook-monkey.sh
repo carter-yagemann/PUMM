@@ -15,7 +15,7 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-HOOK_SO="$(dirname $0)/../src/hook/hook-scan.so"
+HOOK_SO="$(dirname $0)/../src/hook/hook-monkey.so"
 
 if (( $# < 1 )); then
     echo "Usage: hook.sh <cmd>"

@@ -40,6 +40,9 @@
 #define CONFIG_DIR "/.config/uaf-defense/"
 #define MAX_POLICY_SIZE 1024
 
+#ifdef EVIL_MONKEY
+    int monkey_rate = 0;
+#endif
 
 /* Hooks */
 typedef void (*free_t)(void *ptr);
@@ -342,7 +345,26 @@ void *do_malloc(size_t size, void *caller) {
         flush_frees();
     }
 
+#ifdef EVIL_MONKEY
+    /* What is Evil Monkey?
+     *
+     * We need a way to evaluate how good our security policies are. Sadly,
+     * there are only so many known, reproducible use-after-free and double free
+     * bugs out there to test. After real bugs, the next best thing we can use
+     * are synthetic bugs: enter Evil Monkey.
+     *
+     * Evil Monkey will randomly free memory prematurely, causing use-after-free
+     * and double free bugs.
+     */
+    void *ret = real_malloc(size);
+    if (monkey_rate && caller < ((void *) 0x7f00000000000000) && rand() < monkey_rate) {
+        // premature free to introduce bug
+        free(ret);
+    }
+    return ret;
+#else
     return real_malloc(size);
+#endif
 }
 
 void do_free(void *ptr, void *caller) {
