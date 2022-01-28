@@ -37,7 +37,7 @@ fi
 
 echo "seed,signal" > results.csv
 for seed in $(seq $TRIALS); do
-    echo $seed
+    echo -ne "$seed      \r"
     timeout $TIMEOUT gdb -ex "set env LD_PRELOAD = $LD_SO" -ex "set \$seed = $seed" -x "$GDB_SCRIPT" --args $@ &>> gdb.log
     echo "$seed,$?" >> results.csv
 done

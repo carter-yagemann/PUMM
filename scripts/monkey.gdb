@@ -5,6 +5,9 @@ p srand($seed)
 set monkey_rate = 0x0fffffff
 continue
 if ($_siginfo)
-    quit $_siginfo.si_signo
+    set $signo = $_siginfo.si_signo
+    if ($rip < 0x7f00000000000000)
+        quit $signo
+    end
 end
 quit 0

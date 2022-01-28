@@ -899,6 +899,7 @@ def generate_profile_from_graph(graph, procmap, profile_fp, max_distance=-1,
         logfile.write("%d,%d,%d,%d,%d,%s\n" % (graph.num_vertices(),
                 graph.num_edges(), len(units), profile_size,
                 time_sec, os.path.realpath(profile_fp)))
+        logfile.flush()
 
 def main():
     parser = OptionParser(usage='Usage: %prog [options] 1.ptxed[.gz] ...')
