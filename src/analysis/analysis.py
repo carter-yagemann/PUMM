@@ -740,7 +740,12 @@ def find_release_sites(graph, units, max_distance=-1):
 
             h_idx = graph.gp.node2idx[unit['head']]
             c_idx = graph.gp.node2idx[caller]
-            spath_len = len(shortest_path(graph, h_idx, c_idx)[0])
+            try:
+                spath_len = len(shortest_path(graph, h_idx, c_idx)[0])
+            except ValueError:
+                log.error("Shortest path algorithm error")
+                graph.clear_filters()
+                continue
 
             # is this the first allocation of the unit?
             if spath_len > 0 and (max_distance < 0 or
