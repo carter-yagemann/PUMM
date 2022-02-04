@@ -18,11 +18,7 @@
 #
 # This script automates running the evil monkey with different seeds.
 
-TRIALS=100
-TIMEOUT="5s"
-
 SCRIPT_DIR="$(dirname $0)"
-GDB_SCRIPT="$SCRIPT_DIR/monkey.gdb"
 LD_SO="$SCRIPT_DIR/../src/hook/hook-monkey.so"
 
 if [ ! -f "$LD_SO" ]; then
@@ -30,15 +26,16 @@ if [ ! -f "$LD_SO" ]; then
     exit 1
 fi
 
-if (( $# < 1 )); then
-    echo "Usage: monkey.sh <cmd>"
+if (( $# < 2 )); then
+    echo "Usage: monkey-debug.sh <seed> <cmd>"
     exit 1
 fi
 
-echo "seed,signal" > results.csv
-for seed in $(seq $TRIALS); do
-    echo -ne "$seed      \r"
-    echo "SEED = $seed" >> gdb.log
-    timeout $TIMEOUT gdb -q -ex "set env LD_PRELOAD = $LD_SO" -ex "set \$seed = $seed" -x "$GDB_SCRIPT" --args $@ &>> gdb.log
-    echo "$seed,$?" >> results.csv
-done
+seed="$1"
+
+gdb -ex "set env LD_PRELOAD = $LD_SO" \
+    -ex "set \$seed = $seed" \
+    -ex "start" \
+    -ex "p srand($seed)" \
+    -ex "set monkey_rate = 0x0fffffff" \
+    -q --args ${@:2}

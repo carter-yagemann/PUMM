@@ -745,7 +745,7 @@ def find_release_sites(graph, units, max_distance=-1):
             except ValueError:
                 log.error("Shortest path algorithm error")
                 graph.clear_filters()
-                continue
+                break
 
             # is this the first allocation of the unit?
             if spath_len > 0 and (max_distance < 0 or

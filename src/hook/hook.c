@@ -44,6 +44,8 @@
     int monkey_rate = 0;
 #endif
 
+unsigned profile_loaded = 0;
+
 /* Hooks */
 typedef void (*free_t)(void *ptr);
 free_t real_free = NULL;
@@ -220,7 +222,7 @@ void load_profile() {
     char *exe_path, *line, *ptr, *profile_name;
     unsigned long rva;
     void *ava;
-    int num_safe_callers = 0;
+    unsigned num_safe_callers = 0;
     char profile_path[PATH_MAX + 1];
     FILE *profile_fp;
     size_t size = 0;
@@ -246,6 +248,7 @@ void load_profile() {
     }
 
     DEBUG_PRINT("Loading: %s\n", profile_path);
+    profile_loaded = 1;
 
     // create a maps list to convert between RVA and AVA
     if (load_maps()) {
@@ -298,7 +301,7 @@ int should_flush(void *caller) {
     int offset;
 
     // if no profile is loaded, revert to original behavior
-    if (!safe_callers[0])
+    if (!profile_loaded)
         return 1;
 
     for (offset = 0; offset < MAX_POLICY_SIZE; offset++) {
@@ -359,6 +362,7 @@ void *do_malloc(size_t size, void *caller) {
     void *ret = real_malloc(size);
     if (monkey_rate && caller < ((void *) 0x7f00000000000000) && rand() < monkey_rate) {
         // premature free to introduce bug
+        DEBUG_PRINT("Evil Monkey freeing: %p\n", ret);
         free(ret);
     }
     return ret;
