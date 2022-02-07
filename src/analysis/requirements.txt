@@ -1,2 +1,4 @@
 cle>=9.0.5171
 pyvex>=9.0.5171
+matplotlib>=3.5.1
+graphviz>=0.19.1

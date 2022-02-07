@@ -24,15 +24,12 @@ import os
 import re
 import sys
 from traceback import format_exc
-import warnings
 
-# we don't draw so we don't import matplotlib, supress warning
-with warnings.catch_warnings():
-    warnings.simplefilter("ignore")
-    from graph_tool.all import Graph
-    from graph_tool.topology import shortest_path
+from graph_tool.all import Graph
+from graph_tool.topology import shortest_path
 import numpy as np
 
+import draw
 import maps
 
 log = logging.getLogger(name=__name__)
@@ -743,7 +740,7 @@ def find_release_sites(graph, units, max_distance=-1):
             try:
                 spath_len = len(shortest_path(graph, h_idx, c_idx)[0])
             except ValueError:
-                log.error("Shortest path algorithm error")
+                log.warning("Shortest path algorithm error")
                 graph.clear_filters()
                 break
 
@@ -850,7 +847,7 @@ def load_maps(trace_fp):
     return maps.read_maps(map_fp)
 
 def generate_profile_from_graph(graph, procmap, profile_fp, max_distance=-1,
-        filter_keywords=None, logfile=None):
+        filter_keywords=None, logfile=None, output_cfg=None):
     """Generate a profile based on the provided graph and save it.
 
     Keyword Arguments:
@@ -863,6 +860,7 @@ def generate_profile_from_graph(graph, procmap, profile_fp, max_distance=-1,
     of the provided list of keywords.
     logfile -- Record additional evaluation metrics to the provided
     file object (must provide write method) in CSV format.
+    output_cfg -- Save CFG to provided filepath
     """
     start_time = datetime.now()
 
@@ -906,6 +904,14 @@ def generate_profile_from_graph(graph, procmap, profile_fp, max_distance=-1,
                 time_sec, os.path.realpath(profile_fp)))
         logfile.flush()
 
+    # save CFG if requested
+    if output_cfg:
+        try:
+            log.info("Saving CFG to: %s" % output_cfg)
+            draw.save_graph(graph, units, output_cfg)
+        except:
+            log.error("Failed to save CFG: %s" % format_exc())
+
 def main():
     parser = OptionParser(usage='Usage: %prog [options] 1.ptxed[.gz] ...')
     parser.add_option('-l', '--logging', action='store', type='int',
@@ -928,6 +934,8 @@ def main():
     parser.add_option('--incremental', action='store', type='str',
             default=None, help='Save incremental results (for evaluation'
             ' purposes) to the provided directory')
+    parser.add_option('--save-graph', action='store', type='str',
+            default=None, help='Save the final CFG to the provided filepath')
 
     options, args = parser.parse_args()
 
@@ -1019,7 +1027,8 @@ def main():
 
     # generate security profile and save it
     generate_profile_from_graph(graph, procmap, profile_fp,
-            options.distance, options.partition)
+            options.distance, options.partition, output_cfg=options.save_graph)
+
 
 if __name__ == "__main__":
     main()
