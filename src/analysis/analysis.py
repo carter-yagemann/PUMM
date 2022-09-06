@@ -40,7 +40,7 @@ BRANCH_MNEMONICS = {
     'jb', 'jbe', 'jl', 'jle', 'jmp', 'jmpq', 'jnb', 'jnbe', 'jnl', 'jnle',
     'jns', 'jnz', 'jo', 'jp', 'js', 'jz', 'bnd jmp', 'loop', 'jno', 'jnp',
     'jnae', 'jc', 'jae', 'jnc', 'jna', 'ja', 'jnge', 'jge', 'jng', 'jg', 'jpe',
-    'jpo', 'jcxz', 'jecxz'
+    'jpo', 'jcxz', 'jecxz', 'bnd jmpq'
 }
 
 CALL_MNEMONICS = {
