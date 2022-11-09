@@ -1,0 +1,8 @@
+[0x56137616f000(0x14000) @ 0x4000 103:03 96994013 3176965270]: r-xp /usr/bin/ls
+[0x7f3cfa197000(0x23000) @ 0x1000 103:03 96993356 3675054232]: r-xp /usr/lib/x86_64-linux-gnu/ld-2.31.so
+[0x7ffc92586000(0x2000) @ 0 00:00 0 0]: r-xp [vdso]
+[0x7f3cfa15d000(0x19000) @ 0x6000 103:03 97001034 40413480]: r-xp /usr/lib/x86_64-linux-gnu/libselinux.so.1
+[0x7f3cf9f87000(0x178000) @ 0x22000 103:03 96993383 822412741]: r-xp /usr/lib/x86_64-linux-gnu/libc-2.31.so
+[0x7f3cf9ed6000(0x65000) @ 0x2000 103:03 96998152 1862782262]: r-xp /usr/lib/x86_64-linux-gnu/libpcre2-8.so.0.9.0
+[0x7f3cf9ecf000(0x2000) @ 0x1000 103:03 96993496 656189487]: r-xp /usr/lib/x86_64-linux-gnu/libdl-2.31.so
+[0x7f3cf9eb1000(0x11000) @ 0x6000 103:03 96995422 1013372863]: r-xp /usr/lib/x86_64-linux-gnu/libpthread-2.31.so

@@ -32,6 +32,8 @@ class TestMaps(unittest.TestCase):
                               'entries': 99},
                   'ls': {'file': os.path.join(test_dir, 'maps/ls'),
                          'entries': 8},
+                  'ubuntu-20.04-ls': {'file': os.path.join(test_dir, 'maps/ubuntu-20.04-ls'),
+                         'entries': 8},
     }
 
     def setUp(self):
@@ -51,6 +53,10 @@ class TestMaps(unittest.TestCase):
 
     def test_parsing_ls(self):
         self.do_test_parsing('ls')
+
+    def test_parsing_ubuntu_20_04_ls(self):
+        self.do_test_parsing('ubuntu-20.04-ls')
+
 
 class TestAnalysis(unittest.TestCase):
 
