@@ -94,3 +94,10 @@ $REPO/scripts/hook.sh /bin/ls
 Profiles are written into `$HOME/.config/uaf-defense`. They are currently
 *not portable* and *do not check for file modifications*, so if you move or
 update an executable or library, the profile must be regenerated.
+
+# Publications
+
+* Carter Yagemann, Simon P. Chung, Brendan Saltaformaggio, Wenke Lee.
+  [*PUMM: Preventing Use-After-Free Using Execution Unit Partitioning.*](https://www.usenix.org/conference/usenixsecurity23/presentation/yagemann)
+  Appeared in the 32nd USENIX Security Symposium (USENIX’23).
+  Anaheim, California. August 9-11, 2023.
